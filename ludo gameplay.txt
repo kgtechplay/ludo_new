@@ -1,0 +1,24 @@
+Ludo – Game
+Please see the attached image below to get an idea of the board
+
+Ludo Game Items
+•	A Ludo board with four colored starting areas (red, blue, yellow, green).
+•	16 tokens, 4 in each color
+•	A six-sided dice (digital dice in online Ludo)
+•	2–4 players
+
+Game Setup
+1.	Each player chooses a color – red, green, blue, or yellow.
+2.	Place all 4 tokens in the home area of the chosen color.
+3.	The player who rolls the highest number starts first.
+
+Game Play
+Players take turns in a clockwise order; highest throw of the die starts.
+Each throw, the player decides which piece to move. A piece simply moves in a clockwise direction around the track given by the number thrown. If no piece can legally move according to the number thrown, play passes to the next player.
+A throw of 6 gives another turn.
+A player must throw a 6 to move a piece from the starting circle onto the first square on the track. The piece moves 6 squares around the circuit beginning with the appropriately coloured start square (and the player then has another turn).
+If a piece lands on a piece of a different colour, the piece jumped upon is returned to its starting circle.
+If a piece lands upon a piece of the same colour, this forms a block. This block cannot be passed or landed on by any opposing piece.
+The board has safe squares (usually marked with a star) – tokens placed here cannot be cut by opponents.
+After completing one round, your token enters the home column (center path of your color).
+To reach home, you must roll the exact number needed.

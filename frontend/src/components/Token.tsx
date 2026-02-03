@@ -8,12 +8,15 @@ const colorMap: Record<string, string> = {
 interface TokenProps {
   color: "green" | "yellow" | "red" | "blue";
   label: string;
+  /** Use smaller size on board */
+  small?: boolean;
 }
 
-export default function Token({ color, label }: TokenProps) {
+export default function Token({ color, label, small }: TokenProps) {
+  const size = small ? "h-6 w-6 text-[10px]" : "h-10 w-10 text-xs";
   return (
     <span
-      className={`inline-flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold shadow ${
+      className={`inline-flex items-center justify-center rounded-full font-semibold shadow ${size} ${
         colorMap[color]
       }`}
     >

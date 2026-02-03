@@ -1,3 +1,5 @@
+"""Request/response models for player data."""
+
 from pydantic import BaseModel
 
 

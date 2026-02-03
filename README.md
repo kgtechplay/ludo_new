@@ -12,13 +12,23 @@ This repository contains a full-stack Ludo game scaffold built with FastAPI, Pos
 
 ### Backend
 
-```bash
+A Python virtual environment is set up in `backend/.venv` with dependencies installed.
+
+**Windows (PowerShell):**
+```powershell
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.\.venv\Scripts\activate
 uvicorn app.main:app --reload
 ```
+
+**macOS / Linux:**
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+To recreate the venv: `python -m venv .venv` then activate and `pip install -r requirements.txt`.
 
 ### Frontend
 

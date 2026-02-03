@@ -91,14 +91,53 @@ function getTokenPosition(token: TokenState): { row: number; col: number } | nul
 interface BoardProps {
   game: GameStateType | null;
   onTokenClick?: (color: string, tokenIndex: number) => void;
+  onTargetClick?: (move: {
+    color: string;
+    token_index: number;
+    target_kind: "path" | "home";
+    path_index: number | null;
+    home_index: number | null;
+  }) => void;
+  selectedMove?: { color: string; tokenIndex: number } | null;
 }
 
-export default function Board({ game, onTokenClick }: BoardProps) {
+function getMoveTargetPosition(
+  move: {
+    color: string;
+    target_kind: "path" | "home";
+    path_index: number | null;
+    home_index: number | null;
+  }
+): { row: number; col: number } | null {
+  if (move.target_kind === "path" && move.path_index != null) {
+    const pos = PATH_POSITIONS[move.path_index];
+    return pos ? { row: pos[0], col: pos[1] } : null;
+  }
+  if (move.target_kind === "home" && move.home_index != null) {
+    const pos = HOME_POSITIONS[move.color as PlayerColor]?.[move.home_index];
+    return pos ? { row: pos[0], col: pos[1] } : null;
+  }
+  return null;
+}
+
+export default function Board({ game, onTokenClick, onTargetClick, selectedMove }: BoardProps) {
   const validMoveSet = game
     ? new Set(
         game.valid_moves.map((m) => `${m.color}:${m.token_index}`)
       )
     : new Set<string>();
+  const selectedKey = selectedMove ? `${selectedMove.color}:${selectedMove.tokenIndex}` : null;
+  const selectedMoveData = selectedKey
+    ? game?.valid_moves.find((move) => `${move.color}:${move.token_index}` === selectedKey)
+    : null;
+  const selectedTargetPosition = selectedMoveData
+    ? getMoveTargetPosition({
+        color: selectedMoveData.color,
+        target_kind: selectedMoveData.target_kind,
+        path_index: selectedMoveData.path_index,
+        home_index: selectedMoveData.home_index,
+      })
+    : null;
 
   return (
     <section className="w-full max-w-[900px]">
@@ -240,25 +279,52 @@ export default function Board({ game, onTokenClick }: BoardProps) {
                 height: `calc((${CELL_FRACTION}) * 1.4)`,
               }}
             >
-              <button
-                type="button"
-                onClick={() => onTokenClick?.(token.color, token.token_index)}
-                className={`h-full w-full rounded-full ${
-                  canMove
-                    ? "cursor-pointer ring-2 ring-white ring-offset-2 ring-offset-ludo-base"
-                    : "cursor-default"
-                }`}
-                disabled={!canMove}
-              >
-                <Token
-                  color={token.color as PlayerColor}
-                  label={`${token.color[0].toUpperCase()}${token.token_index + 1}`}
-                  small
-                />
-              </button>
-            </div>
-          );
-        })}
+                <button
+                  type="button"
+                  onClick={() => onTokenClick?.(token.color, token.token_index)}
+                  className={`h-full w-full rounded-full ${
+                    canMove
+                      ? "cursor-pointer ring-2 ring-white ring-offset-2 ring-offset-ludo-base"
+                      : "cursor-default"
+                } ${selectedKey === key ? "ring-4 ring-amber-300" : ""}`}
+                  disabled={!canMove}
+                >
+                  <Token
+                    color={token.color as PlayerColor}
+                    label={`${token.color[0].toUpperCase()}${token.token_index + 1}`}
+                    small
+                  />
+                </button>
+              </div>
+            );
+          })}
+
+        {selectedMoveData && selectedTargetPosition && (
+          <div
+            className="absolute flex items-center justify-center"
+            style={{
+              left: `calc((${CELL_FRACTION}) * ${selectedTargetPosition.col} - (${CELL_FRACTION}) * 0.1)`,
+              top: `calc((${CELL_FRACTION}) * ${selectedTargetPosition.row} - (${CELL_FRACTION}) * 0.1)`,
+              width: `calc((${CELL_FRACTION}) * 1.2)`,
+              height: `calc((${CELL_FRACTION}) * 1.2)`,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                onTargetClick?.({
+                  color: selectedMoveData.color,
+                  token_index: selectedMoveData.token_index,
+                  target_kind: selectedMoveData.target_kind,
+                  path_index: selectedMoveData.path_index,
+                  home_index: selectedMoveData.home_index,
+                })
+              }
+              className="h-full w-full rounded-full border-2 border-amber-300 bg-amber-200/70 shadow-[0_0_12px_rgba(251,191,36,0.6)]"
+              aria-label="Place token"
+            />
+          </div>
+        )}
       </div>
       </div>
     </section>

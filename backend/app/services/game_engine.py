@@ -7,7 +7,13 @@ from typing import Optional
 
 # Colors in turn order (clockwise on board)
 COLORS = ("red", "blue", "yellow", "green")
-COLOR_INDEX = {c: i for i, c in enumerate(COLORS)}
+
+# Diagonal placement for 2-player games uses red + yellow.
+ACTIVE_COLORS_BY_COUNT = {
+    2: ("red", "yellow"),
+    3: ("red", "blue", "yellow"),
+    4: COLORS,
+}
 
 # Main track: 52 squares, clockwise. Start path index when leaving yard.
 START_PATH_INDEX = {"red": 0, "blue": 39, "yellow": 13, "green": 26}
@@ -65,6 +71,7 @@ class GameEngineState:
     tokens: list[TokenState] = field(default_factory=list)
     winner_index: Optional[int] = None
     player_count: int = 4
+    active_colors: list[str] = field(default_factory=list)
 
     def get_tokens_by_color(self, color: str) -> list[TokenState]:
         return [t for t in self.tokens if t.color == color]
@@ -97,13 +104,15 @@ class GameEngine:
 
     def __init__(self, player_count: int = 4):
         self.player_count = min(4, max(2, player_count))
+        self.active_colors = list(
+            ACTIVE_COLORS_BY_COUNT.get(self.player_count, COLORS[: self.player_count])
+        )
+        self.color_index = {c: i for i, c in enumerate(self.active_colors)}
 
     def new_game(self) -> GameEngineState:
         """Create initial state: all tokens in yard."""
         tokens: list[TokenState] = []
-        for i, color in enumerate(COLORS):
-            if i >= self.player_count:
-                break
+        for color in self.active_colors:
             for ti in range(TOKENS_PER_PLAYER):
                 tokens.append(
                     TokenState(
@@ -116,6 +125,7 @@ class GameEngine:
             current_player_index=0,
             tokens=tokens,
             player_count=self.player_count,
+            active_colors=self.active_colors,
         )
 
     def roll_dice(self) -> int:
@@ -128,7 +138,7 @@ class GameEngine:
         """
         if state.winner_index is not None:
             return []
-        color = COLORS[state.current_player_index]
+        color = state.active_colors[state.current_player_index]
         tokens = self.get_tokens_by_color(state, color)
         moves: list[tuple[str, int]] = []
 
@@ -172,6 +182,38 @@ class GameEngine:
 
     def get_tokens_by_color(self, state: GameEngineState, color: str) -> list[TokenState]:
         return [t for t in state.tokens if t.color == color]
+
+    def get_move_destination(
+        self,
+        state: GameEngineState,
+        token: TokenState,
+        roll: int,
+    ) -> Optional[tuple[TokenPositionKind, Optional[int], Optional[int]]]:
+        """Return expected destination (kind, path_index, home_index) for a move."""
+        if not self._can_move_token(state, token, roll):
+            return None
+        if token.kind == TokenPositionKind.YARD:
+            return (TokenPositionKind.PATH, START_PATH_INDEX[token.color], None)
+        if token.kind == TokenPositionKind.PATH:
+            assert token.path_index is not None
+            start = START_PATH_INDEX[token.color]
+            steps = (token.path_index - start) % PATH_LENGTH
+            new_steps = steps + roll
+            if new_steps >= PATH_LENGTH:
+                into_home = new_steps - PATH_LENGTH
+                if into_home <= 4:
+                    return (TokenPositionKind.HOME, None, into_home)
+                return None
+            new_path = (start + new_steps) % PATH_LENGTH
+            if state.is_blocked(new_path, token.color):
+                return None
+            return (TokenPositionKind.PATH, new_path, None)
+        if token.kind == TokenPositionKind.HOME:
+            assert token.home_index is not None
+            next_idx = token.home_index + roll
+            if next_idx <= 4:
+                return (TokenPositionKind.HOME, None, next_idx)
+        return None
 
     def apply_move(
         self,
@@ -292,7 +334,7 @@ class GameEngine:
         self._replace_token(state, token, new_token)
         won = self._check_winner(state, token.color)
         if won:
-            state.winner_index = COLOR_INDEX[token.color]
+            state.winner_index = self.color_index[token.color]
         return MoveResult(
             moved=True,
             extra_turn=(roll == 6),
@@ -335,6 +377,7 @@ def state_to_dict(state: GameEngineState) -> dict:
         "tokens": tokens_data,
         "winner_index": state.winner_index,
         "player_count": state.player_count,
+        "active_colors": state.active_colors,
     }
 
 
@@ -351,18 +394,24 @@ def dict_to_state(data: dict) -> GameEngineState:
                 home_index=t.get("home_index"),
             )
         )
+    player_count = data.get("player_count", 4)
+    active_colors = data.get(
+        "active_colors",
+        list(ACTIVE_COLORS_BY_COUNT.get(player_count, COLORS[:player_count])),
+    )
     return GameEngineState(
         current_player_index=data.get("current_player_index", 0),
         last_roll=data.get("last_roll"),
         has_rolled=data.get("has_rolled", False),
         tokens=tokens,
         winner_index=data.get("winner_index"),
-        player_count=data.get("player_count", 4),
+        player_count=player_count,
+        active_colors=active_colors,
     )
 
 
 def advance_turn(state: GameEngineState) -> None:
     """Advance to next player and clear roll."""
-    state.current_player_index = (state.current_player_index + 1) % state.player_count
+    state.current_player_index = (state.current_player_index + 1) % len(state.active_colors)
     state.last_roll = None
     state.has_rolled = False

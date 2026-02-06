@@ -28,12 +28,13 @@ class GameState(BaseModel):
     id: str
     status: Literal["waiting", "active", "finished"]
     player_count: int
+    active_colors: list[str]
     current_player_index: int
     last_roll: Optional[int] = None
     has_rolled: bool = False
     tokens: list[TokenStateSchema]
     winner_index: Optional[int] = None
-    valid_moves: list[dict] = []  # [{"color": "red", "token_index": 0}, ...]
+    valid_moves: list[dict] = []  # [{"color": "red", "token_index": 0, "target_kind": "path"}, ...]
     message: str = ""
 
 
@@ -50,6 +51,9 @@ class MoveRequest(BaseModel):
 
     color: str
     token_index: int
+    target_kind: Literal["path", "home"]
+    path_index: Optional[int] = None
+    home_index: Optional[int] = None
 
 
 class MoveResponse(BaseModel):

@@ -62,12 +62,19 @@ export async function rollDice(gameId: string): Promise<import("../types/game").
 export async function moveToken(
   gameId: string,
   color: string,
-  tokenIndex: number
+  tokenIndex: number,
+  target: { target_kind: "path" | "home"; path_index: number | null; home_index: number | null }
 ): Promise<import("../types/game").GameState> {
   const response = await fetch(`${API_BASE_URL}/games/${gameId}/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ color, token_index: tokenIndex }),
+    body: JSON.stringify({
+      color,
+      token_index: tokenIndex,
+      target_kind: target.target_kind,
+      path_index: target.path_index,
+      home_index: target.home_index,
+    }),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));

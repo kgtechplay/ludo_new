@@ -5,17 +5,20 @@ import Token from "./Token";
 
 type PlayerColor = "red" | "blue" | "yellow" | "green";
 
-// Main path 0-51: [row, col] on 15x15 grid. Clockwise from red start (11,1).
+// Main path 0-51: [row, col] on 15x15 grid. Clockwise from green start (6,0).
 const PATH_POSITIONS: [number, number][] = [
-  [11, 1], [10, 1], [9, 1], [8, 1], [7, 1], [6, 1], [5, 1], [4, 1], [3, 1], [2, 1], [1, 1],
-  [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 9], [1, 10], [1, 11], [1, 12], [1, 13],
-  [2, 13], [3, 13], [4, 13], [5, 13], [6, 13], [7, 13], [8, 13], [9, 13], [10, 13], [11, 13], [12, 13], [13, 13],
-  [13, 12], [13, 11], [13, 10], [13, 9], [13, 8], [13, 7], [13, 6], [13, 5], [13, 4], [13, 3], [13, 2], [13, 1],
-  [12, 1], [11, 1],
+  [6, 0], [6, 1], [6, 2], [6, 3], [6, 4], [6, 5],
+  [5, 6], [4, 6], [3, 6], [2, 6], [1, 6], [0, 6], [0, 7],
+  [0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [5, 8],
+  [6, 9], [6, 10], [6, 11], [6, 12], [6, 13], [6, 14], [7, 14],
+  [8, 14], [8, 13], [8, 12], [8, 11], [8, 10], [8, 9],
+  [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [14, 8], [14, 7],
+  [14, 6], [13, 6], [12, 6], [11, 6], [10, 6], [9, 6],
+  [8, 5], [8, 4], [8, 3], [8, 2], [8, 1], [8, 0], [7, 0],
 ];
 
-// Safe path indexes (star squares)
-const SAFE_PATH_INDEXES = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+// Safe path indexes (start squares)
+const SAFE_PATH_INDEXES = new Set([0, 13, 26, 39]);
 
 // Home column positions per color: 5 cells [row, col]. Red: col 1, Yellow: row 1, Green: col 13, Blue: row 13.
 const HOME_POSITIONS: Record<PlayerColor, [number, number][]> = {
@@ -33,17 +36,17 @@ Object.entries(HOME_POSITIONS).forEach(([color, positions]) => {
 });
 
 const SAFE_STAR_COLORS: Record<number, PlayerColor | "neutral"> = {
-  0: "red",
+  0: "green",
   13: "yellow",
-  26: "green",
+  26: "red",
   39: "blue",
 };
 
 const HOME_ENTRY_ARROWS: Record<PlayerColor, { row: number; col: number; rotation: number }> = {
-  red: { row: 8, col: 1, rotation: 0 },
-  yellow: { row: 1, col: 8, rotation: -90 },
-  green: { row: 6, col: 13, rotation: 180 },
-  blue: { row: 13, col: 6, rotation: 90 },
+  green: { row: 7, col: 0, rotation: 180 },
+  yellow: { row: 0, col: 7, rotation: -90 },
+  red: { row: 14, col: 7, rotation: 90 },
+  blue: { row: 7, col: 14, rotation: 0 },
 };
 
 const HOME_ENTRY_MAP = new Map<string, { color: PlayerColor; rotation: number }>();

@@ -16,13 +16,13 @@ ACTIVE_COLORS_BY_COUNT = {
 }
 
 # Main track: 52 squares, clockwise. Start path index when leaving yard.
-START_PATH_INDEX = {"red": 0, "blue": 39, "yellow": 13, "green": 26}
+START_PATH_INDEX = {"green": 0, "yellow": 13, "red": 26, "blue": 39}
 
 # Path index where each color turns into home column (5 squares)
-HOME_ENTRANCE_PATH = {"red": 50, "blue": 12, "yellow": 25, "green": 38}
+HOME_ENTRANCE_PATH = {"green": 51, "yellow": 12, "blue": 25, "red": 38}
 
 # Safe squares (star): cannot be captured
-SAFE_PATH_INDEXES = {0, 8, 13, 21, 26, 34, 39, 47}
+SAFE_PATH_INDEXES = {0, 13, 26, 39}
 
 TOKENS_PER_PLAYER = 4
 PATH_LENGTH = 52
@@ -159,18 +159,7 @@ class GameEngine:
 
     def _can_advance_on_path(self, state: GameEngineState, token: TokenState, roll: int) -> bool:
         assert token.path_index is not None
-        start = START_PATH_INDEX[token.color]
-        entrance = HOME_ENTRANCE_PATH[token.color]
-        # Normalize position as steps from start (0..51)
-        steps = (token.path_index - start) % PATH_LENGTH
-        new_steps = steps + roll
-        if new_steps >= PATH_LENGTH:
-            # Would go past lap; need to enter home
-            into_home = new_steps - PATH_LENGTH
-            if into_home <= 4:
-                return True  # can enter home
-            return False  # overshoot
-        new_path = (start + new_steps) % PATH_LENGTH
+        new_path = (token.path_index + roll) % PATH_LENGTH
         if state.is_blocked(new_path, token.color):
             return False
         return True
@@ -196,6 +185,7 @@ class GameEngine:
             return (TokenPositionKind.PATH, START_PATH_INDEX[token.color], None)
         if token.kind == TokenPositionKind.PATH:
             assert token.path_index is not None
+            new_path = (token.path_index + roll) % PATH_LENGTH
             start = START_PATH_INDEX[token.color]
             steps = (token.path_index - start) % PATH_LENGTH
             new_steps = steps + roll
@@ -266,30 +256,8 @@ class GameEngine:
         roll: int,
     ) -> MoveResult:
         assert token.path_index is not None
-        start = START_PATH_INDEX[token.color]
-        entrance = HOME_ENTRANCE_PATH[token.color]
-        steps = (token.path_index - start) % PATH_LENGTH
-        new_steps = steps + roll
         captured: Optional[str] = None
-
-        if new_steps >= PATH_LENGTH:
-            into_home = new_steps - PATH_LENGTH
-            if into_home <= 4:
-                new_token = TokenState(
-                    color=token.color,
-                    token_index=token.token_index,
-                    kind=TokenPositionKind.HOME,
-                    home_index=into_home,
-                )
-                self._replace_token(state, token, new_token)
-                return MoveResult(
-                    moved=True,
-                    extra_turn=(roll == 6),
-                    message="Moved into home column.",
-                )
-            return MoveResult(moved=False, extra_turn=False, message="Cannot overshoot home")
-
-        new_path = (start + new_steps) % PATH_LENGTH
+        new_path = (token.path_index + roll) % PATH_LENGTH
         # Capture: send opponent at new_path back to yard
         if state.can_capture(new_path, token.color):
             other = state.get_tokens_at_path(new_path)[0]

@@ -186,15 +186,6 @@ class GameEngine:
         if token.kind == TokenPositionKind.PATH:
             assert token.path_index is not None
             new_path = (token.path_index + roll) % PATH_LENGTH
-            start = START_PATH_INDEX[token.color]
-            steps = (token.path_index - start) % PATH_LENGTH
-            new_steps = steps + roll
-            if new_steps >= PATH_LENGTH:
-                into_home = new_steps - PATH_LENGTH
-                if into_home <= 4:
-                    return (TokenPositionKind.HOME, None, into_home)
-                return None
-            new_path = (start + new_steps) % PATH_LENGTH
             if state.is_blocked(new_path, token.color):
                 return None
             return (TokenPositionKind.PATH, new_path, None)

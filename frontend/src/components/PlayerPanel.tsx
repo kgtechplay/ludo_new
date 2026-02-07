@@ -24,8 +24,9 @@ export default function PlayerPanel({ game }: PlayerPanelProps) {
     );
   }
 
-  const currentColor = COLORS[game.current_player_index];
-  const winnerColor = game.winner_index != null ? COLORS[game.winner_index] : null;
+  const activeColors = game.active_colors.length ? game.active_colors : COLORS.slice(0, game.player_count);
+  const currentColor = activeColors[game.current_player_index];
+  const winnerColor = game.winner_index != null ? activeColors[game.winner_index] : null;
 
   return (
     <section className="rounded-2xl bg-slate-800 p-5 shadow-lg">
@@ -33,7 +34,7 @@ export default function PlayerPanel({ game }: PlayerPanelProps) {
         Players
       </h2>
       <ul className="mt-4 space-y-3">
-        {COLORS.slice(0, game.player_count).map((color, idx) => {
+        {activeColors.map((color, idx) => {
           const isCurrent = color === currentColor;
           const isWinner = winnerColor === color;
           const status = isWinner ? "Winner!" : isCurrent ? "Your turn" : "Waiting";

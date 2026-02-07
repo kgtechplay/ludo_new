@@ -36,17 +36,36 @@ def _engine_state_to_schema(state: GameEngineState) -> GameState:
         )
         for t in state.tokens
     ]
-    valid_moves = [
-        {"color": c, "token_index": ti}
-        for c, ti in GameEngine(player_count=state.player_count).valid_moves(
-            state, state.last_roll or 0
+    engine = GameEngine(player_count=state.player_count)
+    engine.active_colors = state.active_colors
+    engine.color_index = {c: i for i, c in enumerate(state.active_colors)}
+    valid_moves: list[dict] = []
+    for c, ti in engine.valid_moves(state, state.last_roll or 0):
+        token = next(
+            (t for t in state.tokens if t.color == c and t.token_index == ti),
+            None,
         )
-    ]
+        if not token:
+            continue
+        destination = engine.get_move_destination(state, token, state.last_roll or 0)
+        if not destination:
+            continue
+        kind, path_index, home_index = destination
+        valid_moves.append(
+            {
+                "color": c,
+                "token_index": ti,
+                "target_kind": kind.value,
+                "path_index": path_index,
+                "home_index": home_index,
+            }
+        )
     status = "finished" if state.winner_index is not None else "active"
     return GameState(
         id="",
         status=status,
         player_count=state.player_count,
+        active_colors=state.active_colors,
         current_player_index=state.current_player_index,
         last_roll=state.last_roll,
         has_rolled=state.has_rolled,
@@ -92,6 +111,8 @@ async def roll_dice(game_id: str) -> RollResponse:
         raise HTTPException(status_code=400, detail="Game is finished")
     state = dict_to_state(data)
     engine = GameEngine(player_count=state.player_count)
+    engine.active_colors = state.active_colors
+    engine.color_index = {c: i for i, c in enumerate(state.active_colors)}
     if state.has_rolled and engine.valid_moves(state, state.last_roll or 0):
         raise HTTPException(
             status_code=400,
@@ -102,9 +123,30 @@ async def roll_dice(game_id: str) -> RollResponse:
     state.has_rolled = True
     valid_moves = engine.valid_moves(state, roll)
     _games[game_id] = (state_to_dict(state), status)
+    valid_move_payloads: list[dict] = []
+    for c, ti in valid_moves:
+        token = next(
+            (t for t in state.tokens if t.color == c and t.token_index == ti),
+            None,
+        )
+        if not token:
+            continue
+        destination = engine.get_move_destination(state, token, roll)
+        if not destination:
+            continue
+        kind, path_index, home_index = destination
+        valid_move_payloads.append(
+            {
+                "color": c,
+                "token_index": ti,
+                "target_kind": kind.value,
+                "path_index": path_index,
+                "home_index": home_index,
+            }
+        )
     return RollResponse(
         roll=roll,
-        valid_moves=[{"color": c, "token_index": ti} for c, ti in valid_moves],
+        valid_moves=valid_move_payloads,
         message=f"Rolled {roll}. Move a token or pass." if not valid_moves else f"Rolled {roll}.",
     )
 
@@ -119,12 +161,39 @@ async def move_token(game_id: str, payload: MoveRequest) -> GameState:
         raise HTTPException(status_code=400, detail="Game is finished")
     state = dict_to_state(data)
     engine = GameEngine(player_count=state.player_count)
+    engine.active_colors = state.active_colors
+    engine.color_index = {c: i for i, c in enumerate(state.active_colors)}
     roll = state.last_roll
     if roll is None or not state.has_rolled:
         raise HTTPException(status_code=400, detail="Roll the dice first")
     valid_moves = engine.valid_moves(state, roll)
     if (payload.color, payload.token_index) not in valid_moves:
         raise HTTPException(status_code=400, detail="Invalid move")
+    token = next(
+        (t for t in state.tokens if t.color == payload.color and t.token_index == payload.token_index),
+        None,
+    )
+    if not token:
+        raise HTTPException(status_code=400, detail="Invalid token selection")
+    destination = engine.get_move_destination(state, token, roll)
+    if not destination:
+        raise HTTPException(status_code=400, detail="Invalid move")
+    expected_kind, expected_path, expected_home = destination
+    if payload.target_kind != expected_kind.value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Move must be exactly {roll} spaces for this token",
+        )
+    if expected_kind.value == "path" and payload.path_index != expected_path:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Move must be exactly {roll} spaces for this token",
+        )
+    if expected_kind.value == "home" and payload.home_index != expected_home:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Move must be exactly {roll} spaces for this token",
+        )
     result = engine.apply_move(state, payload.color, payload.token_index, roll)
     if not result.moved:
         raise HTTPException(status_code=400, detail=result.message)
@@ -153,6 +222,8 @@ async def pass_turn(game_id: str) -> GameState:
         raise HTTPException(status_code=400, detail="Game is finished")
     state = dict_to_state(data)
     engine = GameEngine(player_count=state.player_count)
+    engine.active_colors = state.active_colors
+    engine.color_index = {c: i for i, c in enumerate(state.active_colors)}
     roll = state.last_roll
     if roll is None or not state.has_rolled:
         raise HTTPException(status_code=400, detail="Roll the dice first")

@@ -109,6 +109,12 @@ export default function App() {
     setSelectedMove(null);
   }, [game?.id, game?.current_player_index, game?.last_roll]);
 
+  const handleEndGame = useCallback(() => {
+    setGame(null);
+    setSelectedMove(null);
+    setError(null);
+  }, []);
+
   const canPass = game?.status === "active" && game.has_rolled && game.valid_moves.length === 0;
 
   return (
@@ -120,7 +126,15 @@ export default function App() {
             Roll the dice, move a token. Roll 6 to leave the yard; exact roll to reach home.
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            type="button"
+            onClick={handleEndGame}
+            disabled={!game}
+            className="rounded-xl bg-red-600/80 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            End Game
+          </button>
           <button
             type="button"
             onClick={() => handleNewGame(2)}

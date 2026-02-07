@@ -5,17 +5,20 @@ import Token from "./Token";
 
 type PlayerColor = "red" | "blue" | "yellow" | "green";
 
-// Main path 0-51: [row, col] on 15x15 grid. Clockwise from red start (11,1).
+// Main path 0-51: [row, col] on 15x15 grid. Clockwise from green start (6,0).
 const PATH_POSITIONS: [number, number][] = [
-  [11, 1], [10, 1], [9, 1], [8, 1], [7, 1], [6, 1], [5, 1], [4, 1], [3, 1], [2, 1], [1, 1],
-  [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 9], [1, 10], [1, 11], [1, 12], [1, 13],
-  [2, 13], [3, 13], [4, 13], [5, 13], [6, 13], [7, 13], [8, 13], [9, 13], [10, 13], [11, 13], [12, 13], [13, 13],
-  [13, 12], [13, 11], [13, 10], [13, 9], [13, 8], [13, 7], [13, 6], [13, 5], [13, 4], [13, 3], [13, 2], [13, 1],
-  [12, 1], [11, 1],
+  [6, 0], [6, 1], [6, 2], [6, 3], [6, 4], [6, 5],
+  [5, 6], [4, 6], [3, 6], [2, 6], [1, 6], [0, 6], [0, 7],
+  [0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [5, 8],
+  [6, 9], [6, 10], [6, 11], [6, 12], [6, 13], [6, 14], [7, 14],
+  [8, 14], [8, 13], [8, 12], [8, 11], [8, 10], [8, 9],
+  [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [14, 8], [14, 7],
+  [14, 6], [13, 6], [12, 6], [11, 6], [10, 6], [9, 6],
+  [8, 5], [8, 4], [8, 3], [8, 2], [8, 1], [8, 0], [7, 0],
 ];
 
-// Safe path indexes (star squares)
-const SAFE_PATH_INDEXES = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+// Safe path indexes (start squares)
+const SAFE_PATH_INDEXES = new Set([0, 13, 26, 39]);
 
 // Home column positions per color: 5 cells [row, col]. Red: col 1, Yellow: row 1, Green: col 13, Blue: row 13.
 const HOME_POSITIONS: Record<PlayerColor, [number, number][]> = {
@@ -33,17 +36,17 @@ Object.entries(HOME_POSITIONS).forEach(([color, positions]) => {
 });
 
 const SAFE_STAR_COLORS: Record<number, PlayerColor | "neutral"> = {
-  0: "red",
+  0: "green",
   13: "yellow",
-  26: "green",
+  26: "red",
   39: "blue",
 };
 
 const HOME_ENTRY_ARROWS: Record<PlayerColor, { row: number; col: number; rotation: number }> = {
-  red: { row: 8, col: 1, rotation: 0 },
-  yellow: { row: 1, col: 8, rotation: -90 },
-  green: { row: 6, col: 13, rotation: 180 },
-  blue: { row: 13, col: 6, rotation: 90 },
+  green: { row: 7, col: 0, rotation: 180 },
+  yellow: { row: 0, col: 7, rotation: -90 },
+  red: { row: 14, col: 7, rotation: 90 },
+  blue: { row: 7, col: 14, rotation: 0 },
 };
 
 const HOME_ENTRY_MAP = new Map<string, { color: PlayerColor; rotation: number }>();
@@ -91,14 +94,53 @@ function getTokenPosition(token: TokenState): { row: number; col: number } | nul
 interface BoardProps {
   game: GameStateType | null;
   onTokenClick?: (color: string, tokenIndex: number) => void;
+  onTargetClick?: (move: {
+    color: string;
+    token_index: number;
+    target_kind: "path" | "home";
+    path_index: number | null;
+    home_index: number | null;
+  }) => void;
+  selectedMove?: { color: string; tokenIndex: number } | null;
 }
 
-export default function Board({ game, onTokenClick }: BoardProps) {
+function getMoveTargetPosition(
+  move: {
+    color: string;
+    target_kind: "path" | "home";
+    path_index: number | null;
+    home_index: number | null;
+  }
+): { row: number; col: number } | null {
+  if (move.target_kind === "path" && move.path_index != null) {
+    const pos = PATH_POSITIONS[move.path_index];
+    return pos ? { row: pos[0], col: pos[1] } : null;
+  }
+  if (move.target_kind === "home" && move.home_index != null) {
+    const pos = HOME_POSITIONS[move.color as PlayerColor]?.[move.home_index];
+    return pos ? { row: pos[0], col: pos[1] } : null;
+  }
+  return null;
+}
+
+export default function Board({ game, onTokenClick, onTargetClick, selectedMove }: BoardProps) {
   const validMoveSet = game
     ? new Set(
         game.valid_moves.map((m) => `${m.color}:${m.token_index}`)
       )
     : new Set<string>();
+  const selectedKey = selectedMove ? `${selectedMove.color}:${selectedMove.tokenIndex}` : null;
+  const selectedMoveData = selectedKey
+    ? game?.valid_moves.find((move) => `${move.color}:${move.token_index}` === selectedKey)
+    : null;
+  const selectedTargetPosition = selectedMoveData
+    ? getMoveTargetPosition({
+        color: selectedMoveData.color,
+        target_kind: selectedMoveData.target_kind,
+        path_index: selectedMoveData.path_index,
+        home_index: selectedMoveData.home_index,
+      })
+    : null;
 
   return (
     <section className="w-full max-w-[900px]">
@@ -121,13 +163,15 @@ export default function Board({ game, onTokenClick }: BoardProps) {
             const isCenter = row >= 5 && row <= 9 && col >= 5 && col <= 9;
             let bg = "bg-ludo-base";
             if (isCenter) bg = "bg-ludo-base";
+            else if (isPath) bg = "bg-orange-300";
             else if (homeColor) bg = `bg-ludo-${homeColor}/80`;
-            else if (isPath) bg = "bg-ludo-base";
 
             return (
               <div
                 key={`${row}-${col}`}
-                className={`relative flex items-center justify-center border border-ludo-path-outline ${bg} ${
+                className={`relative flex items-center justify-center border ${
+                  isPath ? "border-orange-600" : "border-ludo-path-outline"
+                } ${bg} ${
                   isPath ? "rounded-[20%]" : "rounded-[12%]"
                 }`}
               >
@@ -240,25 +284,52 @@ export default function Board({ game, onTokenClick }: BoardProps) {
                 height: `calc((${CELL_FRACTION}) * 1.4)`,
               }}
             >
-              <button
-                type="button"
-                onClick={() => onTokenClick?.(token.color, token.token_index)}
-                className={`h-full w-full rounded-full ${
-                  canMove
-                    ? "cursor-pointer ring-2 ring-white ring-offset-2 ring-offset-ludo-base"
-                    : "cursor-default"
-                }`}
-                disabled={!canMove}
-              >
-                <Token
-                  color={token.color as PlayerColor}
-                  label={`${token.color[0].toUpperCase()}${token.token_index + 1}`}
-                  small
-                />
-              </button>
-            </div>
-          );
-        })}
+                <button
+                  type="button"
+                  onClick={() => onTokenClick?.(token.color, token.token_index)}
+                  className={`h-full w-full rounded-full ${
+                    canMove
+                      ? "cursor-pointer ring-2 ring-white ring-offset-2 ring-offset-ludo-base"
+                      : "cursor-default"
+                } ${selectedKey === key ? "ring-4 ring-amber-300" : ""}`}
+                  disabled={!canMove}
+                >
+                  <Token
+                    color={token.color as PlayerColor}
+                    label={`${token.color[0].toUpperCase()}${token.token_index + 1}`}
+                    small
+                  />
+                </button>
+              </div>
+            );
+          })}
+
+        {selectedMoveData && selectedTargetPosition && (
+          <div
+            className="absolute flex items-center justify-center"
+            style={{
+              left: `calc((${CELL_FRACTION}) * ${selectedTargetPosition.col} - (${CELL_FRACTION}) * 0.1)`,
+              top: `calc((${CELL_FRACTION}) * ${selectedTargetPosition.row} - (${CELL_FRACTION}) * 0.1)`,
+              width: `calc((${CELL_FRACTION}) * 1.2)`,
+              height: `calc((${CELL_FRACTION}) * 1.2)`,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                onTargetClick?.({
+                  color: selectedMoveData.color,
+                  token_index: selectedMoveData.token_index,
+                  target_kind: selectedMoveData.target_kind,
+                  path_index: selectedMoveData.path_index,
+                  home_index: selectedMoveData.home_index,
+                })
+              }
+              className="h-full w-full rounded-full border-2 border-amber-300 bg-amber-200/70 shadow-[0_0_12px_rgba(251,191,36,0.6)]"
+              aria-label="Place token"
+            />
+          </div>
+        )}
       </div>
       </div>
     </section>

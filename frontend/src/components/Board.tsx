@@ -163,13 +163,15 @@ export default function Board({ game, onTokenClick, onTargetClick, selectedMove 
             const isCenter = row >= 5 && row <= 9 && col >= 5 && col <= 9;
             let bg = "bg-ludo-base";
             if (isCenter) bg = "bg-ludo-base";
+            else if (isPath) bg = "bg-orange-300";
             else if (homeColor) bg = `bg-ludo-${homeColor}/80`;
-            else if (isPath) bg = "bg-ludo-base";
 
             return (
               <div
                 key={`${row}-${col}`}
-                className={`relative flex items-center justify-center border border-ludo-path-outline ${bg} ${
+                className={`relative flex items-center justify-center border ${
+                  isPath ? "border-orange-600" : "border-ludo-path-outline"
+                } ${bg} ${
                   isPath ? "rounded-[20%]" : "rounded-[12%]"
                 }`}
               >

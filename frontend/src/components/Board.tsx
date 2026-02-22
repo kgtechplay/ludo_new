@@ -17,9 +17,9 @@ const PATH_POSITIONS: [number, number][] = [
 
 const START_INDEX: Record<PlayerColor, number> = {
   green: 0,
-  yellow: 13,
-  blue: 26,
-  red: 39,
+  yellow: 14,
+  blue: 27,
+  red: 41,
 };
 
 const HOME_LANE: Record<PlayerColor, [number, number][]> = {
@@ -41,6 +41,13 @@ const COLOR_CLASS: Record<PlayerColor, string> = {
   blue: "bg-ludo-blue",
   yellow: "bg-ludo-yellow",
   green: "bg-ludo-green",
+};
+
+const ARROW_TILES: Record<string, string> = {
+  "0-7": "rotate-90",
+  "7-14": "rotate-180",
+  "14-7": "-rotate-90",
+  "7-0": "rotate-0",
 };
 
 interface BoardProps {
@@ -73,10 +80,7 @@ export default function Board({ game, onTokenClick, onTargetClick, selectedMove 
   return (
     <section className="w-full max-w-[860px]">
       <div className="rounded-lg border-2 border-black bg-white p-1 shadow-xl">
-        <div
-          className="relative grid aspect-square w-full"
-          style={{ gridTemplateColumns: `repeat(${SIZE}, minmax(0, 1fr))` }}
-        >
+        <div className="relative grid aspect-square w-full" style={{ gridTemplateColumns: `repeat(${SIZE}, minmax(0, 1fr))` }}>
           {Array.from({ length: SIZE * SIZE }, (_, idx) => {
             const row = Math.floor(idx / SIZE);
             const col = idx % SIZE;
@@ -100,15 +104,28 @@ export default function Board({ game, onTokenClick, onTargetClick, selectedMove 
             }
             if (isCenter) bg = "bg-ludo-base";
 
-            return <div key={key} className={`border border-black ${bg}`} />;
+            return (
+              <div key={key} className={`relative flex items-center justify-center border border-black ${bg}`}>
+                {ARROW_TILES[key] && (
+                  <svg
+                    className={`h-[55%] w-[55%] text-black ${ARROW_TILES[key]}`}
+                    viewBox="0 0 100 100"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <polygon points="10,50 62,50 62,30 90,50 62,70 62,50" />
+                  </svg>
+                )}
+              </div>
+            );
           })}
 
-          {([
+          {[
             { color: "blue" as const, row: 0, col: 0 },
             { color: "red" as const, row: 0, col: 9 },
             { color: "yellow" as const, row: 9, col: 0 },
             { color: "green" as const, row: 9, col: 9 },
-          ]).map((yard) => (
+          ].map((yard) => (
             <div
               key={yard.color}
               className={`${COLOR_CLASS[yard.color]} absolute border border-black`}
@@ -146,7 +163,12 @@ export default function Board({ game, onTokenClick, onTargetClick, selectedMove 
               <div
                 key={key}
                 className="absolute flex items-center justify-center"
-                style={{ top: `calc(${calc(row)} + (${CELL}) * 0.12)`, left: `calc(${calc(col)} + (${CELL}) * 0.12)`, width: `calc((${CELL}) * 0.76)`, height: `calc((${CELL}) * 0.76)` }}
+                style={{
+                  top: `calc(${calc(row)} + (${CELL}) * 0.12)`,
+                  left: `calc(${calc(col)} + (${CELL}) * 0.12)`,
+                  width: `calc((${CELL}) * 0.76)`,
+                  height: `calc((${CELL}) * 0.76)`,
+                }}
               >
                 <button
                   type="button"

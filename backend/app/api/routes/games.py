@@ -255,9 +255,10 @@ async def play_chance(game_id: str) -> GameState:
     if state.has_rolled:
         raise HTTPException(status_code=400, detail="Cannot use chance after rolling")
 
-    message = engine.apply_random_chance(state)
+    message, turns_to_advance = engine.apply_random_chance(state)
     if state.winner_index is None:
-        advance_turn(state)
+        for _ in range(max(1, turns_to_advance)):
+            advance_turn(state)
     else:
         status = "finished"
 

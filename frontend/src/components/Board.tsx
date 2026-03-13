@@ -45,6 +45,12 @@ const keyOf = (row: number, col: number) => `${row}:${col}`;
 const calc = (n: number) => `calc((${CELL}) * ${n})`;
 const yardCalc = (n: number) => `calc((${YARD_CELL}) * ${n})`;
 const isCenterTile = (row: number, col: number) => row >= 6 && row <= 8 && col >= 6 && col <= 8;
+const HOME_COUNT_POSITIONS: Record<PlayerColor, { top: string; left: string }> = {
+  red: { top: `calc(${calc(6)} + (${CELL}) * 0.5)`, left: `calc(${calc(7)} + (${CELL}) * 0.5)` },
+  green: { top: `calc(${calc(7)} + (${CELL}) * 0.5)`, left: `calc(${calc(8)} + (${CELL}) * 0.5)` },
+  yellow: { top: `calc(${calc(8)} + (${CELL}) * 0.5)`, left: `calc(${calc(7)} + (${CELL}) * 0.5)` },
+  blue: { top: `calc(${calc(7)} + (${CELL}) * 0.5)`, left: `calc(${calc(6)} + (${CELL}) * 0.5)` },
+};
 
 const PATH_INDEX_BY_CELL = new Map<string, number>(
   PATH_POSITIONS.map(([row, col], idx) => [keyOf(row, col), idx])
@@ -65,6 +71,37 @@ interface BoardProps {
     home_color?: PlayerColor;
   }) => void;
   selectedMove?: { color: string; tokenIndex: number } | null;
+  rollingDie?: { value: number; settling: boolean; step: number } | null;
+}
+
+function pipPositions(value: number): string[] {
+  switch (value) {
+    case 1:
+      return ["center"];
+    case 2:
+      return ["top-left", "bottom-right"];
+    case 3:
+      return ["top-left", "center", "bottom-right"];
+    case 4:
+      return ["top-left", "top-right", "bottom-left", "bottom-right"];
+    case 5:
+      return ["top-left", "top-right", "center", "bottom-left", "bottom-right"];
+    default:
+      return ["top-left", "top-right", "mid-left", "mid-right", "bottom-left", "bottom-right"];
+  }
+}
+
+function pipClass(position: string): string {
+  const classes: Record<string, string> = {
+    center: "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2",
+    "top-left": "left-[22%] top-[22%]",
+    "top-right": "right-[22%] top-[22%]",
+    "mid-left": "left-[22%] top-1/2 -translate-y-1/2",
+    "mid-right": "right-[22%] top-1/2 -translate-y-1/2",
+    "bottom-left": "left-[22%] bottom-[22%]",
+    "bottom-right": "right-[22%] bottom-[22%]",
+  };
+  return classes[position] ?? classes.center;
 }
 
 function tokenCell(token: TokenState): [number, number] | null {
@@ -74,11 +111,20 @@ function tokenCell(token: TokenState): [number, number] | null {
   return null;
 }
 
-export default function Board({ game, onTokenClick, onTileClick, selectedMove }: BoardProps) {
+export default function Board({ game, onTokenClick, onTileClick, selectedMove, rollingDie }: BoardProps) {
   const validMoveSet = game
     ? new Set(game.valid_moves.map((m) => `${m.color}:${m.token_index}`))
     : new Set<string>();
   const selectedKey = selectedMove ? `${selectedMove.color}:${selectedMove.tokenIndex}` : null;
+  const homeCounts = ALL_COLORS.reduce(
+    (counts, color) => {
+      counts[color] = game?.tokens.filter((token) => token.color === color && token.kind === "home" && token.home_index === 5).length ?? 0;
+      return counts;
+    },
+    {} as Record<PlayerColor, number>
+  );
+  const winnerLabel =
+    game?.winner_index != null ? `Player ${game.winner_index + 1} is the winner` : null;
   const displayTokens: TokenState[] =
     game?.tokens ??
     ALL_COLORS.flatMap((color) =>
@@ -92,7 +138,7 @@ export default function Board({ game, onTokenClick, onTileClick, selectedMove }:
     );
 
   return (
-    <section className="w-full max-w-[860px]">
+    <section className="relative w-full max-w-[860px]">
       <div className="rounded-lg border-2 border-black bg-white p-1 shadow-xl">
         <div
           className="relative grid aspect-square w-full"
@@ -231,8 +277,50 @@ export default function Board({ game, onTokenClick, onTileClick, selectedMove }:
               </div>
             );
           })}
+
+          {(Object.entries(HOME_COUNT_POSITIONS) as [PlayerColor, { top: string; left: string }][]).map(
+            ([color, position]) => (
+              <div
+                key={`home-count-${color}`}
+                className={`pointer-events-none absolute z-20 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white/80 text-sm font-black text-slate-950 shadow-lg ${
+                  COLOR_CLASS[color]
+                }`}
+                style={{ top: position.top, left: position.left }}
+              >
+                {homeCounts[color]}
+              </div>
+            )
+          )}
         </div>
       </div>
+      {rollingDie && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center">
+          <div
+            className={`relative h-24 w-24 rounded-[1.75rem] border-4 border-slate-900 bg-white shadow-[0_24px_40px_rgba(15,23,42,0.34)] transition-all ${
+              rollingDie.settling ? "duration-200 ease-out" : "duration-75 ease-linear"
+            }`}
+            style={{
+              transform: `translate3d(${Math.sin(rollingDie.step * 0.85) * 20}px, ${
+                Math.cos(rollingDie.step * 0.7) * 12
+              }px, 0) rotate(${rollingDie.step * 19}deg) scale(${rollingDie.settling ? 1 : 1.04})`,
+            }}
+          >
+            {pipPositions(rollingDie.value).map((position, index) => (
+              <span
+                key={`${position}-${index}`}
+                className={`absolute h-3.5 w-3.5 rounded-full bg-slate-900 ${pipClass(position)}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {winnerLabel && (
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 z-40 flex -translate-y-1/2 justify-center">
+          <div className="rounded-full border-2 border-amber-300 bg-slate-950/90 px-6 py-3 text-lg font-bold text-amber-200 shadow-[0_18px_30px_rgba(0,0,0,0.45)]">
+            {winnerLabel}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -18,8 +18,8 @@ ACTIVE_COLORS_BY_COUNT = {
 # Main track: 52 squares, clockwise. Start path index when leaving yard.
 START_PATH_INDEX = {"green": 0, "yellow": 13, "blue": 26, "red": 39}
 
-# Path index where each color turns into home column (5 squares)
-HOME_ENTRANCE_PATH = {"green": 51, "yellow": 12, "blue": 25, "red": 38}
+# Path index where each color can enter its 5-square home column from the main track.
+HOME_ENTRANCE_PATH = {"green": 50, "yellow": 11, "blue": 24, "red": 37}
 
 # Safe squares (star): cannot be captured
 SAFE_PATH_INDEXES = {0, 13, 26, 39}
@@ -34,6 +34,14 @@ CHANCE_OPTIONS = [
     {
         "id": "advance_all_mine_by_1",
         "label": "Advance all my coins that can move by 1",
+    },
+    {
+        "id": "skip_next_player",
+        "label": "Make the next player after you skip a turn",
+    },
+    {
+        "id": "move_closest_to_start_to_nearest_start",
+        "label": "Move your coin closest to your start to the nearest start tile",
     },
 ]
 
@@ -144,14 +152,18 @@ class GameEngine:
     def chance_options(self) -> list[dict]:
         return [dict(option) for option in CHANCE_OPTIONS]
 
-    def apply_random_chance(self, state: GameEngineState) -> str:
+    def apply_random_chance(self, state: GameEngineState) -> tuple[str, int]:
         option = random.choice(CHANCE_OPTIONS)
         option_id = option["id"]
         if option_id == "opponent_most_advanced_back_4":
-            return self._chance_opponent_back_4(state)
+            return (self._chance_opponent_back_4(state), 1)
         if option_id == "advance_all_mine_by_1":
-            return self._chance_advance_all_mine_by_1(state)
-        return "Chance had no effect."
+            return (self._chance_advance_all_mine_by_1(state), 1)
+        if option_id == "skip_next_player":
+            return self._chance_skip_next_player(state)
+        if option_id == "move_closest_to_start_to_nearest_start":
+            return (self._chance_move_closest_to_start_to_nearest_start(state), 1)
+        return ("Chance had no effect.", 1)
 
     def valid_moves(self, state: GameEngineState, roll: int) -> list[tuple[str, int]]:
         """
@@ -194,7 +206,7 @@ class GameEngine:
     def _can_advance_in_home(self, token: TokenState, roll: int) -> bool:
         assert token.home_index is not None
         next_idx = token.home_index + roll
-        return next_idx <= 4
+        return next_idx <= 5
 
     def get_tokens_by_color(self, state: GameEngineState, color: str) -> list[TokenState]:
         return [t for t in state.tokens if t.color == color]
@@ -223,7 +235,7 @@ class GameEngine:
         if token.kind == TokenPositionKind.HOME:
             assert token.home_index is not None
             next_idx = token.home_index + roll
-            if next_idx <= 4:
+            if next_idx <= 5:
                 return (TokenPositionKind.HOME, None, next_idx)
         return None
 
@@ -293,6 +305,12 @@ class GameEngine:
             won = self._check_winner(state, token.color)
             if won:
                 state.winner_index = self.color_index[token.color]
+            if new_home == 5:
+                return MoveResult(
+                    moved=True,
+                    extra_turn=(roll == 6),
+                    message="Reached home!" + (" Winner!" if won else ""),
+                )
             return MoveResult(
                 moved=True,
                 extra_turn=(roll == 6),
@@ -342,7 +360,7 @@ class GameEngine:
         # After passing entrance tile, movement continues in the 5-cell home lane.
         if traveled + roll > steps_to_entrance:
             home_index = traveled + roll - steps_to_entrance - 1
-            if home_index > 4:
+            if home_index > 5:
                 return (TokenPositionKind.HOME, None, None)
             return (TokenPositionKind.HOME, None, home_index)
         new_path = (token.path_index + roll) % PATH_LENGTH
@@ -356,7 +374,7 @@ class GameEngine:
     ) -> MoveResult:
         assert token.home_index is not None
         next_idx = token.home_index + roll
-        if next_idx > 4:
+        if next_idx > 5:
             return MoveResult(moved=False, extra_turn=False, message="Must roll exact to finish")
         new_token = TokenState(
             color=token.color,
@@ -368,6 +386,12 @@ class GameEngine:
         won = self._check_winner(state, token.color)
         if won:
             state.winner_index = self.color_index[token.color]
+        if next_idx == 5:
+            return MoveResult(
+                moved=True,
+                extra_turn=(roll == 6),
+                message="Reached home!" + (" Winner!" if won else ""),
+            )
         return MoveResult(
             moved=True,
             extra_turn=(roll == 6),
@@ -388,8 +412,31 @@ class GameEngine:
     def _check_winner(self, state: GameEngineState, color: str) -> bool:
         home_tokens = [t for t in state.tokens if t.color == color and t.kind == TokenPositionKind.HOME]
         return len(home_tokens) == TOKENS_PER_PLAYER and all(
-            t.home_index == 4 for t in home_tokens
+            t.home_index == 5 for t in home_tokens
         )
+
+    def _route_progress(self, token: TokenState) -> Optional[int]:
+        if token.kind != TokenPositionKind.PATH or token.path_index is None:
+            return None
+        start = START_PATH_INDEX[token.color]
+        return (token.path_index - start) % PATH_LENGTH
+
+    def _is_before_home_lane(self, token: TokenState) -> bool:
+        progress = self._route_progress(token)
+        if progress is None:
+            return False
+        start = START_PATH_INDEX[token.color]
+        entrance = HOME_ENTRANCE_PATH[token.color]
+        steps_to_entrance = (entrance - start) % PATH_LENGTH
+        return progress <= steps_to_entrance
+
+    def _nearest_start_path(self, path_index: int) -> int:
+        def circular_distance(target: int) -> tuple[int, int]:
+            forward = (target - path_index) % PATH_LENGTH
+            backward = (path_index - target) % PATH_LENGTH
+            return (min(forward, backward), target)
+
+        return min(SAFE_PATH_INDEXES, key=circular_distance)
 
     def _chance_opponent_back_4(self, state: GameEngineState) -> str:
         current_color = state.active_colors[state.current_player_index]
@@ -442,6 +489,48 @@ class GameEngine:
             state.winner_index = self.color_index[current_color]
             return f"Chance: advanced {moved_count} coin(s) by 1. Winner!"
         return f"Chance: advanced {moved_count} coin(s) by 1."
+
+    def _chance_skip_next_player(self, state: GameEngineState) -> tuple[str, int]:
+        if len(state.active_colors) <= 2:
+            skipped_color = state.active_colors[(state.current_player_index + 1) % len(state.active_colors)]
+            return (f"Chance: {skipped_color} will lose the next turn.", 2)
+        skipped_color = state.active_colors[(state.current_player_index + 1) % len(state.active_colors)]
+        return (f"Chance: {skipped_color} will lose the next turn.", 2)
+
+    def _chance_move_closest_to_start_to_nearest_start(self, state: GameEngineState) -> str:
+        current_color = state.active_colors[state.current_player_index]
+        candidates = [
+            token
+            for token in state.tokens
+            if token.color == current_color
+            and token.kind == TokenPositionKind.PATH
+            and token.path_index is not None
+            and self._is_before_home_lane(token)
+        ]
+        if not candidates:
+            return "Chance: no eligible coin could move to a start tile."
+
+        own_start = START_PATH_INDEX[current_color]
+
+        def closeness_to_own_start(token: TokenState) -> tuple[int, int]:
+            assert token.path_index is not None
+            forward = (token.path_index - own_start) % PATH_LENGTH
+            backward = (own_start - token.path_index) % PATH_LENGTH
+            return (min(forward, backward), token.token_index)
+
+        target = min(candidates, key=closeness_to_own_start)
+        assert target.path_index is not None
+        new_path = self._nearest_start_path(target.path_index)
+        moved_token = TokenState(
+            color=target.color,
+            token_index=target.token_index,
+            kind=TokenPositionKind.PATH,
+            path_index=new_path,
+        )
+        self._replace_token(state, target, moved_token)
+        return (
+            f"Chance: {current_color} token {target.token_index + 1} moved to start tile {new_path}."
+        )
 
 
 def state_to_dict(state: GameEngineState) -> dict:

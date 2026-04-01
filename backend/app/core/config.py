@@ -5,6 +5,20 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+    "http://localhost:5176",
+    "http://127.0.0.1:5176",
+    "https://twisted-ludo.onrender.com",
+    "https://twisted-ludo-api.onrender.com",
+]
+
+
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
@@ -13,6 +27,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./ludo.db"
     db_auto_create: bool = True
     app_env: str = "development"
+    cors_origins: list[str] = DEFAULT_CORS_ORIGINS.copy()
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
@@ -29,6 +44,15 @@ class Settings(BaseSettings):
                     continue
                 query_pairs.append((key, query_value))
             return urlunsplit(parsed._replace(query=urlencode(query_pairs)))
+        return value
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def normalize_cors_origins(cls, value):
+        if value is None:
+            return DEFAULT_CORS_ORIGINS.copy()
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)

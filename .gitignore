@@ -19,3 +19,12 @@ package-lock.json
 # Local tooling
 .claude/
 backend/logs/
+*-local.log
+*-local.err.log
+backend-local.log
+backend-local.err.log
+
+# Frontend local env
+frontend/.env
+frontend/.env.local
+frontend/.env.development

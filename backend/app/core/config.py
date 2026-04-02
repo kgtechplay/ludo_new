@@ -1,4 +1,3 @@
-import os
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +25,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./ludo.db"
     db_auto_create: bool = True
     app_env: str = "development"
+    cors_origins: str = ",".join(DEFAULT_CORS_ORIGINS)
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
@@ -35,6 +35,8 @@ class Settings(BaseSettings):
 
     @staticmethod
     def normalize_database_url(value: str) -> str:
+        import os
+
         if isinstance(value, str) and os.name == "nt" and value.startswith("postgresql+psycopg://"):
             normalized = value.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
             parsed = urlsplit(normalized)
@@ -46,12 +48,12 @@ class Settings(BaseSettings):
             return urlunsplit(parsed._replace(query=urlencode(query_pairs)))
         return value
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
 settings = Settings()
 
 
 def get_cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS", ",".join(DEFAULT_CORS_ORIGINS))
+    raw = settings.cors_origins
     return [origin.strip() for origin in raw.split(",") if origin.strip()]

@@ -89,6 +89,11 @@ def _bind_player_user(
         player.user_id = user_id
 
 
+def _stable_player_id(game_id: str, player_index: int) -> str:
+    """Build a deterministic player id for DB-restored games."""
+    return f"restored:{game_id}:{player_index}"
+
+
 async def _persist_game(lobby: LobbyRecord, db: AsyncSession) -> None:
     """Upsert a single persisted game row keyed by game_id."""
     import app.models.game  # noqa: F401
@@ -162,6 +167,70 @@ async def _persist_game(lobby: LobbyRecord, db: AsyncSession) -> None:
             record.ended_at = None
 
     await db.commit()
+
+
+async def _restore_lobby_from_db(
+    game_id: str,
+    db: Optional[AsyncSession] = None,
+) -> Optional["LobbyRecord"]:
+    """Rehydrate a lobby from the persisted games table when memory was lost."""
+    import app.models.game  # noqa: F401
+    from sqlalchemy import select
+    from app.models.game import Game
+
+    own_session = False
+    if db is None:
+        from app.core.database import SessionLocal
+
+        db = SessionLocal()
+        own_session = True
+
+    try:
+        result = await db.execute(select(Game).where(Game.game_id == game_id))
+        record = result.scalar_one_or_none()
+        if record is None:
+            return None
+
+        if record.status not in ("active", "paused", "completed"):
+            return None
+
+        if not record.engine_state_json:
+            return None
+
+        slots = [
+            (0, "red", record.player_one_display_name, record.player_one_user_id),
+            (1, "blue", record.player_two_display_name, record.player_two_user_id),
+            (2, "yellow", record.player_three_display_name, record.player_three_user_id),
+            (3, "green", record.player_four_display_name, record.player_four_user_id),
+        ]
+        players = [
+            PlayerRecord(
+                player_id=_stable_player_id(game_id, player_index),
+                color=color,
+                player_index=player_index,
+                display_name=display_name or f"Player {player_index + 1}",
+                ready=True,
+                connected=False,
+                user_id=user_id,
+            )
+            for player_index, color, display_name, user_id in slots[: record.player_count]
+            if user_id is not None or display_name
+        ]
+
+        restored_status = "finished" if record.status == "completed" else record.status
+        lobby = LobbyRecord(
+            game_id=record.game_id,
+            player_count=record.player_count,
+            players=players,
+            status=restored_status,
+            engine_state=json.loads(record.engine_state_json),
+            created_at=record.created_at,
+        )
+        _lobbies[game_id] = lobby
+        return lobby
+    finally:
+        if own_session:
+            await db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -252,25 +321,55 @@ def _engine_state_to_schema(game_id: str, state: GameEngineState, lobby: LobbyRe
     )
 
 
-def _get_lobby(game_id: str) -> LobbyRecord:
-    if game_id not in _lobbies:
-        raise HTTPException(status_code=404, detail="Game not found")
-    return _lobbies[game_id]
+async def _get_lobby(game_id: str, db: Optional[AsyncSession] = None) -> LobbyRecord:
+    lobby = _lobbies.get(game_id)
+    if lobby is not None:
+        return lobby
+    restored = await _restore_lobby_from_db(game_id, db)
+    if restored is not None:
+        return restored
+    raise HTTPException(status_code=404, detail="Game not found")
 
 
-def _require_active_player(lobby: LobbyRecord, player_id: Optional[str]) -> PlayerRecord:
+def _sync_player_identity_from_auth(
+    lobby: LobbyRecord,
+    player_id: Optional[str],
+    authorization: str,
+) -> Optional[PlayerRecord]:
+    """Rebind a restored player's transient player_id using the authenticated user."""
+    user_id = _optional_user_id(authorization)
+    if user_id is None:
+        return None
+    record = next((p for p in lobby.players if p.user_id == user_id), None)
+    if record and player_id and record.player_id != player_id:
+        record.player_id = player_id
+    return record
+
+
+def _require_active_player(
+    lobby: LobbyRecord,
+    player_id: Optional[str],
+    authorization: str = "",
+) -> PlayerRecord:
     """Validate X-Player-ID header and return the matching PlayerRecord."""
-    if not player_id:
-        raise HTTPException(status_code=403, detail="Missing X-Player-ID header")
-    record = next((p for p in lobby.players if p.player_id == player_id), None)
+    record = next((p for p in lobby.players if p.player_id == player_id), None) if player_id else None
     if not record:
+        record = _sync_player_identity_from_auth(lobby, player_id, authorization)
+    if not record:
+        if not player_id:
+            raise HTTPException(status_code=403, detail="Missing X-Player-ID header")
         raise HTTPException(status_code=403, detail="Unknown player for this game")
     return record
 
 
-def _check_turn(lobby: LobbyRecord, player_id: Optional[str], state: GameEngineState) -> None:
+def _check_turn(
+    lobby: LobbyRecord,
+    player_id: Optional[str],
+    state: GameEngineState,
+    authorization: str = "",
+) -> None:
     """Raise 403 if it is not this player's turn."""
-    record = _require_active_player(lobby, player_id)
+    record = _require_active_player(lobby, player_id, authorization)
     current_color = state.active_colors[state.current_player_index]
     if record.color != current_color:
         raise HTTPException(status_code=403, detail="Not your turn")
@@ -317,9 +416,43 @@ async def join_game(
     game_id: str,
     payload: JoinRequest,
     authorization: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
 ) -> JoinResponse:
     """Join an existing lobby. Returns this player's player_id and assigned color."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id)
+    authenticated_user_id = _optional_user_id(authorization)
+
+    if authenticated_user_id is not None:
+        existing_record = next(
+            (player for player in lobby.players if player.user_id == authenticated_user_id),
+            None,
+        )
+        if existing_record is not None:
+            existing_record.display_name = payload.display_name or existing_record.display_name
+            return JoinResponse(
+                player_id=existing_record.player_id,
+                color=existing_record.color,
+                player_index=existing_record.player_index,
+                lobby=_lobby_to_schema(lobby),
+            )
+
+    # Older games may have invited/guest seats persisted without a bound user id.
+    # Allow a signed-in user to reclaim exactly one unbound slot on resumable games.
+    if authenticated_user_id is not None and lobby.status in ("active", "paused"):
+        unbound_players = [player for player in lobby.players if player.user_id is None]
+        if len(unbound_players) == 1:
+            reclaimed = unbound_players[0]
+            reclaimed.user_id = authenticated_user_id
+            if payload.display_name and payload.display_name != "Player":
+                reclaimed.display_name = payload.display_name
+            await _persist_game(lobby, db)
+            return JoinResponse(
+                player_id=reclaimed.player_id,
+                color=reclaimed.color,
+                player_index=reclaimed.player_index,
+                lobby=_lobby_to_schema(lobby),
+            )
+
     if lobby.status not in ("waiting", "paused"):
         raise HTTPException(status_code=400, detail="Game already started")
     if len(lobby.players) >= lobby.player_count:
@@ -332,7 +465,7 @@ async def join_game(
         color=active_colors[player_index],
         player_index=player_index,
         display_name=payload.display_name,
-        user_id=_optional_user_id(authorization),
+        user_id=authenticated_user_id,
     )
     lobby.players.append(record)
     await manager.broadcast(game_id, {
@@ -355,10 +488,10 @@ async def mark_ready(
     db: AsyncSession = Depends(get_db),
 ) -> LobbyStateSchema:
     """Mark a player as ready. When all players ready, game transitions to active."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id, db)
     if lobby.status != "waiting":
         raise HTTPException(status_code=400, detail="Game already started")
-    record = _require_active_player(lobby, x_player_id)
+    record = _require_active_player(lobby, x_player_id, authorization)
     _bind_player_user(lobby, record, authorization)
     record.ready = True
 
@@ -391,7 +524,7 @@ async def mark_ready(
 @router.websocket("/{game_id}/ws")
 async def websocket_endpoint(websocket: WebSocket, game_id: str, player_id: str) -> None:
     """WebSocket connection for real-time game updates."""
-    lobby = _lobbies.get(game_id)
+    lobby = await _get_lobby(game_id)
     if not lobby:
         await websocket.close(code=4004)
         return
@@ -446,13 +579,32 @@ async def websocket_endpoint(websocket: WebSocket, game_id: str, player_id: str)
 
 
 @router.get("/{game_id}", response_model=GameState)
-async def get_game(game_id: str) -> GameState:
+async def get_game(
+    game_id: str,
+    x_player_id: Optional[str] = Header(default=None),
+    authorization: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
+) -> GameState:
     """Fetch game state by ID."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id, db)
+    _sync_player_identity_from_auth(lobby, x_player_id, authorization)
     if lobby.status == "waiting" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
     return _engine_state_to_schema(game_id, state, lobby)
+
+
+@router.get("/{game_id}/lobby", response_model=LobbyStateSchema)
+async def get_lobby_state(
+    game_id: str,
+    x_player_id: Optional[str] = Header(default=None),
+    authorization: str = Header(default=""),
+    db: AsyncSession = Depends(get_db),
+) -> LobbyStateSchema:
+    """Fetch lobby metadata even when the game has not started yet."""
+    lobby = await _get_lobby(game_id, db)
+    _sync_player_identity_from_auth(lobby, x_player_id, authorization)
+    return _lobby_to_schema(lobby)
 
 
 @router.post("/{game_id}/roll", response_model=RollResponse)
@@ -462,14 +614,14 @@ async def roll_dice(
     authorization: str = Header(default=""),
 ) -> RollResponse:
     """Roll the dice for the current player."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id)
     if lobby.status == "finished":
         raise HTTPException(status_code=400, detail="Game is finished")
     if lobby.status != "active" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
-    _check_turn(lobby, x_player_id, state)
-    _bind_player_user(lobby, _require_active_player(lobby, x_player_id), authorization)
+    _check_turn(lobby, x_player_id, state, authorization)
+    _bind_player_user(lobby, _require_active_player(lobby, x_player_id, authorization), authorization)
 
     engine = GameEngine(player_count=state.player_count)
     engine.active_colors = state.active_colors
@@ -526,14 +678,14 @@ async def move_token(
     authorization: str = Header(default=""),
 ) -> GameState:
     """Move a token. Returns updated game state."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id)
     if lobby.status == "finished":
         raise HTTPException(status_code=400, detail="Game is finished")
     if lobby.status != "active" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
-    _check_turn(lobby, x_player_id, state)
-    _bind_player_user(lobby, _require_active_player(lobby, x_player_id), authorization)
+    _check_turn(lobby, x_player_id, state, authorization)
+    _bind_player_user(lobby, _require_active_player(lobby, x_player_id, authorization), authorization)
 
     engine = GameEngine(player_count=state.player_count)
     engine.active_colors = state.active_colors
@@ -609,14 +761,14 @@ async def pass_turn(
     authorization: str = Header(default=""),
 ) -> GameState:
     """Pass turn when no valid move available."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id)
     if lobby.status == "finished":
         raise HTTPException(status_code=400, detail="Game is finished")
     if lobby.status != "active" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
-    _check_turn(lobby, x_player_id, state)
-    _bind_player_user(lobby, _require_active_player(lobby, x_player_id), authorization)
+    _check_turn(lobby, x_player_id, state, authorization)
+    _bind_player_user(lobby, _require_active_player(lobby, x_player_id, authorization), authorization)
 
     engine = GameEngine(player_count=state.player_count)
     engine.active_colors = state.active_colors
@@ -650,14 +802,14 @@ async def play_chance(
     authorization: str = Header(default=""),
 ) -> GameState:
     """Use chance instead of rolling the dice for this turn."""
-    lobby = _get_lobby(game_id)
+    lobby = await _get_lobby(game_id)
     if lobby.status == "finished":
         raise HTTPException(status_code=400, detail="Game is finished")
     if lobby.status != "active" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
-    _check_turn(lobby, x_player_id, state)
-    _bind_player_user(lobby, _require_active_player(lobby, x_player_id), authorization)
+    _check_turn(lobby, x_player_id, state, authorization)
+    _bind_player_user(lobby, _require_active_player(lobby, x_player_id, authorization), authorization)
 
     engine = GameEngine(player_count=state.player_count)
     engine.active_colors = state.active_colors
@@ -708,8 +860,8 @@ async def pause_game(
     db: AsyncSession = Depends(get_db),
 ) -> GameState:
     """Pause an active game and persist its state."""
-    lobby = _get_lobby(game_id)
-    record = _require_active_player(lobby, x_player_id)
+    lobby = await _get_lobby(game_id, db)
+    record = _require_active_player(lobby, x_player_id, authorization)
     _bind_player_user(lobby, record, authorization)
     if lobby.status != "active":
         raise HTTPException(status_code=400, detail="Game is not active")
@@ -734,8 +886,8 @@ async def resume_game(
     db: AsyncSession = Depends(get_db),
 ) -> GameState:
     """Vote to resume a paused game. Game resumes when all players have voted."""
-    lobby = _get_lobby(game_id)
-    record = _require_active_player(lobby, x_player_id)
+    lobby = await _get_lobby(game_id, db)
+    record = _require_active_player(lobby, x_player_id, authorization)
     _bind_player_user(lobby, record, authorization)
     if lobby.status != "paused":
         raise HTTPException(status_code=400, detail="Game is not paused")
@@ -773,8 +925,8 @@ async def reset_game(
     db: AsyncSession = Depends(get_db),
 ) -> LobbyStateSchema:
     """Reset a game back to the waiting/lobby state (host only)."""
-    lobby = _get_lobby(game_id)
-    record = _require_active_player(lobby, x_player_id)
+    lobby = await _get_lobby(game_id, db)
+    record = _require_active_player(lobby, x_player_id, authorization)
     _bind_player_user(lobby, record, authorization)
     if record.player_index != 0:
         raise HTTPException(status_code=403, detail="Only the host can reset the game")
@@ -805,8 +957,8 @@ async def claim_game(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
     """Bind the current authenticated user to an existing player slot and persist it for history."""
-    lobby = _get_lobby(game_id)
-    record = _require_active_player(lobby, x_player_id)
+    lobby = await _get_lobby(game_id, db)
+    record = _require_active_player(lobby, x_player_id, authorization)
     _bind_player_user(lobby, record, authorization)
     await _persist_game(lobby, db)
     return {"ok": True}

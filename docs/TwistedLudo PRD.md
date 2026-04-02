@@ -1,323 +1,179 @@
- ## Light PRD (Updated) — **Ludo Duel (2P Mobile)** with Fun Twists
+# Twisted Ludo PRD
 
-**Platform:** Mobile (Android + iOS)
-**Mode:** 2-player (Online PvP; optional Local Pass-and-Play later)
-**Positioning:** Classic Ludo feel + **more chaos, rivalry, comebacks** with **low strategy / low friction**.
+## 1. Product Summary
 
----
+Twisted Ludo is a browser-based multiplayer Ludo experience focused on:
 
-# 1) Problem & Opportunity
+- fast 2-player online play
+- simple onboarding
+- account-backed resume and history
+- low-friction link sharing
 
-Classic Ludo issues (especially in 2P):
+The current product direction is:
 
-* Snowball: early lead often stays ahead
-* Mid-game can feel repetitive
-* Luck-only can feel unfair (no “comeback lever”)
+- web first
+- 2-player primary
+- account-aware recovery
+- `My Games` as the main control center after creation, pause, or resume
 
-**Opportunity:** Add *controlled* chaos + comeback mechanics that are **automatic or one-tap**, keeping turns fast.
+## 2. Product Goals
 
----
+### Primary Goals
 
-# 2) Goals & Success Metrics
+- make starting a game feel lightweight
+- make returning to a saved game reliable for signed-in users
+- keep the game accessible from laptop, tablet, and mobile browser sizes
+- keep game state understandable at all times: waiting, in progress, paused, completed
 
-### Product Goals
+### UX Goals
 
-* High “moment density”: cuts, surprises, revenge, hot-risk punishments
-* Low decision complexity: play in one hand, minimal menus
-* Short matches: 6–12 minutes typical
+- single obvious sign-in entry for logged-out users
+- clean top-right actions for signed-in users
+- shareable game URLs that stay consistent across create, resume, and reopen flows
+- minimal dead ends after pause, resume, or closing a lobby
 
-### MVP Success Metrics
+## 3. Target Users
 
-* Match completion rate ≥ 75%
-* Median match duration: 8–10 minutes
-* Rematch rate: 30%+
-* D1 retention (early target): 25%+
+- friends playing a quick online Ludo match
+- users who want to start on one browser and resume later
+- users who expect a casual game to work cleanly on both desktop and phone browsers
 
----
+## 4. Current Supported Scope
 
-# 3) Target Users
+### In Scope
 
-* Casual 2-player users (friends/couples)
-* People who already know Ludo
-* Want **fun + competitive**, not deep strategy
+- sign-in / sign-up
+- 2-player game creation
+- join by URL
+- waiting lobby
+- real-time board updates
+- pause / resume
+- `My Games`
+- database-backed game persistence
 
----
+### Out of Scope For Now
 
-# 4) Core Gameplay Rules (Baseline)
+- 4-player gameplay as a polished supported flow
+- native mobile apps
+- local pass-and-play
+- social systems beyond link sharing
 
-* 2 players, 4 tokens each
-* 1 die
-* Roll **6** to bring a token out (standard)
-* Cutting: landing on opponent sends opponent token back to base (unless protected by safe/shield rules)
-* Exact roll required to reach final home cell
+## 5. Core User Flows
 
----
+### Flow A: Create Game
 
-# 5) Board & Tile Map (Fixed)
+1. Signed-in user clicks `Create 2-Player Game`
+2. Game is created and lobby popup opens
+3. User can:
+   - copy the share link
+   - close the popup and return home
+   - click `Start Game` to mark themselves ready
 
-## Track indexing (for implementation)
+Expected result:
 
-* Single ring track: **52 tiles** indexed **0 → 51**, clockwise
-* Red Start: **0**
-* Blue Start: **26**
+- after clicking `Start Game`, host is returned to `My Games`
+- the game should appear there as `Waiting`
 
-## Home entry
+### Flow B: Join Shared URL
 
-* Red home-entry: **51** (tile just before Red Start)
-* Blue home-entry: **25** (tile just before Blue Start)
+1. Player 2 opens the shared game URL
+2. Player 2 joins the lobby
+3. Player 2 clicks `Start Game`
 
-## Home lanes
+Expected results:
 
-* Red lane: `R1..R6`
-* Blue lane: `B1..B6`
+- if player 1 is already ready, the game board loads
+- if player 1 is not ready yet, player 2 remains in the waiting lobby
 
-## Safe tiles (cannot be cut)
+### Flow C: Reopen Waiting Game
 
-`{0, 8, 13, 21, 26, 34, 39, 47}`
+1. User opens `My Games`
+2. User clicks the waiting game ID
+3. Lobby reopens
 
-## Trick tiles (trigger random effect on landing exactly)
+Expected results:
 
-`{3, 11, 19, 29, 37, 45}`
-(Mirrored fairness: each tile +26 mod 52)
+- if this user already clicked `Start Game`, their row shows `Ready`
+- the start button is hidden for that user
 
----
+### Flow D: Pause And Resume
 
-# 6) Twist Mechanics (Final Set)
+1. Player pauses an active game
+2. Game appears in `My Games`
+3. Players resume later from `My Games` or copied URL
 
-## A) Reverse Meter (Revenge Meter)
+Expected results:
 
-**Purpose:** A simple comeback lever without adding strategy depth.
+- all players must resume before gameplay continues
+- once a player resumes, they should not be asked to resume again
+- that player should see the game as `Waiting` until the others resume
 
-**Trigger**
+## 6. Identity And Persistence Rules
 
-* When your token is cut → `revenge_meter += 1` (max 3)
+### Signed-In Users
 
-**Use**
+Signed-in users should be able to:
 
-* On your turn, before rolling, if meter > 0:
+- persist waiting, active, paused, and completed games
+- reopen games from `My Games`
+- reclaim saved seats from a game URL
+- resume later from another browser or device
 
-  * Tap **“Revenge Roll”** → consumes 1 meter
-  * That roll only uses **biased dice** toward 5–6
+### Guest Users
 
-**Dice bias example**
+Guest users may still:
 
-* Normal: uniform 1–6
-* Revenge: weights like `[1:10%, 2:10%, 3:15%, 4:15%, 5:25%, 6:25%]`
+- join and play
+- continue within the same browser session
 
-**UX**
+But guest users are not guaranteed to:
 
-* Meter shown near avatar (0–3 pips)
-* Button appears only when available
+- reclaim a paused game later on a fresh browser/device
 
----
+Product implication:
 
-## B) Trick Tiles (Surprise Moments)
+- if a guest wants durable recovery, the UI should encourage sign-in before leaving or pausing
 
-**Purpose:** Make the board feel alive; create “highlight” moments.
+## 7. My Games Expectations
 
-**Trigger**
+`My Games` is intended to be the main hub for saved matches.
 
-* Landing exactly on a Trick tile triggers **one random effect**.
+It should show:
 
-**Effect Pool (MVP)**
+- waiting games
+- in-progress games
+- paused games
+- completed games
+- aborted games
 
-1. **Banana Slip**: move back 3
-2. **Rocket**: move forward 4
-3. **Shield**: ignore next cut (one-time)
-4. **Teleport**: jump to nearest safe tile ahead
-5. **Freeze (Rare)**: opponent skips next turn
-6. **Magnet**: swap with your own farthest-ahead token
+Each entry should make it easy to:
 
-**Constraints / Safety**
+- identify the game
+- understand the current status
+- reopen it when appropriate
+- copy its URL when useful
 
-* Only **one Trick resolution per turn** (no retrigger chaining even if Teleport lands on another Trick tile)
-* Freeze fairness:
+Creator-only behavior:
 
-  * “Rare” probability (e.g., 5–8%)
-  * Cap: max **2 freezes per player per match**
+- the creator should be able to delete the game from `My Games`
 
-**Resolution order (important for consistency)**
+## 8. UI Principles
 
-1. Move token per dice
-2. If land on opponent on non-safe → cut happens
-3. If landed tile is Trick → apply effect
-4. If effect moves token → apply cut rules again (but do not trigger another Trick)
+- mobile-friendly layouts without hiding critical actions
+- clear status messaging
+- icon-driven secondary actions where appropriate
+- avoid duplicate buttons for the same action
+- prefer a single canonical route into a game: its shared game URL / clickable game id
 
----
+## 9. Current Product Constraints
 
-## C) Hot Six Rule (Funny Risk / Anti-snowball)
+- 4-player creation is disabled in the UI
+- some multiplayer edge cases still need continued hardening around roll animation and turn sync
+- guest recovery is intentionally weaker than signed-in recovery
 
-**Purpose:** Rolling many 6s gets spicy; leader gets punishable moments.
+## 10. Near-Term Priorities
 
-**Tracking**
-
-* Count number of 6s rolled per player: `six_count[player]`
-
-**Trigger**
-
-* When a player rolls their **3rd six** in the match → **HOT State** activates immediately after the move resolves.
-
-**Effect (HOT State)**
-
-* For the HOT player, for **one opponent turn window**:
-
-  * Their tokens become **cuttable even on safe tiles**
-* Visual: flames/glow + warning banner “HOT!”
-
-**Expiry**
-
-* HOT expires after opponent completes their next turn (i.e., opponent gets exactly one chance to punish)
-
-**Clarity rule**
-
-* HOT affects **all tokens** of that player during HOT window (simpler + more dramatic)
-
----
-
-## D) Underdog Sprint (Gap ≥ 2) — Updated Finish Mechanic
-
-**Purpose:** Rubber-band only when the lead becomes significant, to prevent hopeless endgames.
-
-### Definitions
-
-* `tokens_home[player]` in [0..4]
-* `gap = abs(tokens_home[P1] - tokens_home[P2])`
-* `lagging_player` = player with fewer tokens home
-
-### Trigger (only on “token goes home” event)
-
-Whenever **any player gets a token home**:
-
-* If `gap >= 2` → activate **Underdog Sprint** for the lagging player
-
-Examples that trigger: 2–0, 3–1, 4–2
-Non-trigger: 1–0, 2–1, 3–2
-
-### Effect
-
-For the lagging player’s **next 2 turns**:
-
-* Dice results **1–3 automatically become 4**
-* 4–6 remain unchanged
-* UI banner + dice boost icon: “UNDERDOG SPRINT!”
-
-### Expiry
-
-Sprint ends when either:
-
-1. Lagging player completes **2 turns**, OR
-2. Lagging player gets **one token home**
-
-### Non-stacking
-
-* If Sprint triggers again while active → **reset** to 2 turns (no stacking beyond 2)
-
-### Interaction rule
-
-* Apply Sprint upgrade **after** the roll is generated (normal or revenge):
-
-  * Roll generated → if sprint active and roll in 1–3 → upgrade to 4
-
----
-
-# 7) UX & Game Flow (Low friction)
-
-## Primary Screens
-
-1. **Home**
-
-   * Quick Match
-   * Play with Friend (invite/link/room code)
-   * How to Play
-2. **Matchmaking / Lobby**
-
-   * Invite accepted, ready state
-3. **Game Board**
-
-   * Board + tokens + dice
-   * Revenge button (conditional)
-   * Status indicators: Shield, Hot, Sprint, Freeze
-4. **Results**
-
-   * Winner + summary + rematch
-
-## Turn Flow
-
-1. Show state badges (HOT / Sprint / Shield etc.)
-2. If Revenge meter > 0 → show “Revenge Roll”
-3. Tap Dice → roll animation
-4. If only one legal move → auto-move
-
-   * Else highlight movable tokens → player taps one
-5. Resolve:
-
-   * Cut → Trick (if any) → finish/home
-6. Pass turn
-
----
-
-# 8) Feedback & Delight
-
-* Fast, punchy animations:
-
-  * Cut (pop + whoosh)
-  * Trick (slot-machine reveal)
-  * Hot (flame glow)
-  * Sprint (boost burst)
-* Minimal text banners (1–2 seconds):
-
-  * “REVENGE!”, “SHIELD!”, “HOT!”, “SPRINT!”
-
----
-
-# 9) Fairness & Anti-Frustration
-
-* Server authoritative RNG (online):
-
-  * Dice results
-  * Trick outcomes
-* Guardrails:
-
-  * No Trick chaining
-  * Freeze capped
-  * Hot window duration fixed (one opponent turn)
-  * Sprint only when gap ≥ 2 and only 2 turns
-
----
-
-# 10) System/State Model (High-level)
-
-### Per player
-
-* `tokens_home`
-* `revenge_meter (0..3)`
-* `six_count`
-* `sprint_turns_left (0..2)`
-* `freeze_next_turn (bool)`
-* `hot_active (bool)` / `hot_expires_after_opponent_turn (bool)`
-
-### Per token
-
-* Location: `BASE | TRACK(index 0..51) | HOME(color, laneIndex 1..6)`
-* `shield_active (bool)`
-
-### Board config
-
-* `safeTiles: Set<int>`
-* `trickTiles: Set<int>`
-* `tileType(index)`
-
----
-
-# 11) MVP Scope
-
-### Must-have (MVP)
-
-* Online 2P match
-* Core Ludo rules + safe tiles + cutting
-* Reverse Meter + Revenge Roll
-* Trick Tiles + 6 effects + no chaining + freeze cap
-* Hot Six rule
-* Underdog Sprint (Gap ≥ 2) with reset rules
-* Results + rematch
-
+- stabilize multiplayer turn-sync edge cases
+- keep `My Games` and lobby flows consistent
+- preserve account-backed resume reliability
+- update docs and deployment instructions alongside behavior changes

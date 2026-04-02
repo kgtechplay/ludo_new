@@ -1,345 +1,432 @@
 # Implementation Guide
 
-This guide explains how Twisted Ludo is implemented today so the codebase is easier to maintain, extend, and deploy.
+This guide explains how Twisted Ludo works today so the current codebase, runtime behavior, and UI flows are easier to maintain.
 
-## 1. Product overview
+## 1. Product Overview
 
-Twisted Ludo is an online multiplayer Ludo app with:
+Twisted Ludo is a web-based multiplayer Ludo app with:
 
-- account-based sign-in and sign-up
+- account sign-in and sign-up
 - resumable multiplayer sessions
-- real-time game updates with WebSockets
-- persistent game history tied to users
-- responsive desktop and mobile layouts
+- real-time board updates over WebSockets
+- database-backed game history
+- responsive UI for laptop, tablet, and mobile browsers
 
-Core user flows:
+Current product emphasis:
 
-1. A signed-out user lands on the home page and can sign in or join by game link.
-2. A signed-in user can create a new 2-player or 4-player game.
-3. Players join a lobby and click Start.
-4. Once all required players are ready, the game becomes active.
-5. Active games can be paused and later resumed.
-6. `My Games` shows live, paused, completed, and aborted games tied to the user.
+- 2-player online play
+- account-backed recovery and resume
+- `My Games` as the central place to reopen waiting, active, and paused matches
 
-## 2. Frontend architecture
+Important current constraint:
 
-### 2.1 App shell and pages
+- 4-player creation is disabled in the UI for now
 
-Primary files:
+## 2. Frontend Architecture
+
+### 2.1 App Shell
+
+Key files:
 
 - `frontend/src/App.tsx`
 - `frontend/src/pages/HomePage.tsx`
 - `frontend/src/pages/GamePage.tsx`
 
-Responsibilities:
+### 2.2 Home Page
 
-- `HomePage.tsx`
-  - central sign-in button for logged-out users
-  - create-game actions for signed-in users
-  - top-right `My Games` and `Sign Out`
-  - full-screen `My Games` overlay
-- `GamePage.tsx`
-  - lobby state
-  - active game state
-  - pause / resume / reset actions
-  - board, dice, and player panel composition
+`HomePage.tsx` is responsible for:
 
-### 2.2 Auth state
+- single centered sign-in entry point for logged-out users
+- signed-in create-game actions
+- top-right `My Games`
+- top-right `Sign Out`
+- full-page `My Games` overlay
 
-Primary file:
+Current home behavior:
+
+- `Create 2-Player Game` is enabled
+- `Create 4-Player Game` is disabled
+- logged-out users can still join by link
+
+### 2.3 Auth State
+
+Key file:
 
 - `frontend/src/context/AuthContext.tsx`
 
-Frontend auth responsibilities:
+Responsibilities:
 
-- store JWT token in client state/storage
-- expose current user and login/logout methods
-- attach token to authenticated API calls
+- login/register/logout
+- store JWT token locally
+- fetch current user from `/auth/me`
+- expose `user`, `token`, and auth methods to the app
 
-### 2.3 API layer
+### 2.4 API Layer
 
-Primary file:
+Key file:
 
 - `frontend/src/api/client.ts`
 
 Responsibilities:
 
-- REST calls for auth and game actions
-- token-aware headers
-- player-id headers for game actions
-- base URL and WebSocket URL helpers
+- all frontend HTTP requests
+- all WebSocket URL generation
+- token-aware request headers
+- player-id request headers
 
-Current frontend expectation:
+Current rule:
 
-- backend is available on port `8080` locally unless `VITE_API_BASE_URL` overrides it
+- all frontend API traffic is derived from `VITE_API_BASE_URL`
 
-### 2.4 Local player identity
+That includes:
 
-Primary file:
+- auth endpoints
+- game endpoints
+- WebSocket endpoint base
+
+### 2.5 Local Player Identity
+
+Key file:
 
 - `frontend/src/hooks/usePlayerIdentity.ts`
 
-Why it exists:
+Responsibilities:
 
-- stores per-game player identity in the browser
-- lets a returning browser reconnect to the same game slot
-- helps the app claim existing game sessions into account history
+- store per-game browser identity
+- reconnect an existing browser to the same seat
+- keep local markers such as "this player already clicked resume"
 
-### 2.5 Real-time updates
+### 2.6 Real-Time Updates
 
-Primary file:
+Key file:
 
 - `frontend/src/hooks/useGameSocket.ts`
 
 Responsibilities:
 
-- connect to the backend WebSocket for a specific game and player
-- receive lobby updates, game updates, reset events, and pause/resume state
-- keep the React UI in sync without polling
+- receive lobby updates
+- receive game-state updates
+- receive pause/resume events
+- receive opponent rolling start/stop events
 
-### 2.6 Main gameplay UI
+### 2.7 Game Page Boot Flow
 
-Primary files:
+Key file:
 
-- `frontend/src/components/Board.tsx`
-- `frontend/src/components/Dice.tsx`
-- `frontend/src/components/PlayerPanel.tsx`
+- `frontend/src/pages/GamePage.tsx`
+
+`GamePage` now drives the app through explicit boot states rather than relying only on socket timing.
+
+Important boot phases:
+
+- `loading`
+- `ready`
+- `needs_auth`
+- `stale`
+
+Main outcomes:
+
+- waiting lobby
+- active board
+- paused overlay
+- sign-in-to-reclaim prompt
+- stale-game screen
+
+### 2.8 Lobby UI
+
+Key file:
+
 - `frontend/src/components/LobbyView.tsx`
+
+Current lobby behavior:
+
+- close icon returns to home
+- copy-link icon copies the canonical game URL
+- player readiness is shown inline
+- host clicking `Start Game` marks the host ready and returns to `My Games`
+- invited player clicking `Start Game`:
+  - waits in the lobby if the host is not ready
+  - loads the board immediately if that click starts the match
+- once a user is already ready, the start button is hidden when the lobby is reopened
+
+### 2.9 My Games
+
+Key file:
+
 - `frontend/src/components/MyGames.tsx`
 
-Notes:
+Current behavior:
 
-- `Board.tsx` renders the 15x15 board and token overlays.
-- `Dice.tsx` contains the primary rolling action and smaller game control buttons.
-- `PlayerPanel.tsx` shows the current players and turn highlighting.
-- `LobbyView.tsx` handles the pre-game waiting room.
-- `MyGames.tsx` renders a table of user games with action buttons.
+- full-page overlay
+- mobile card layout
+- desktop table layout
+- clickable game ID for waiting/active/paused games
+- copy-link icon for active/paused games
+- delete icon for creator/host only
+- stale-game popup cleanup
 
-## 3. Backend architecture
+Displayed statuses:
 
-### 3.1 App startup
+- `Waiting`
+- `In Progress`
+- `Paused`
+- `Completed`
+- `Aborted`
 
-Primary file:
+Special case:
+
+- if a paused player already clicked resume, that row appears as `Waiting` for that player
+
+## 3. Backend Architecture
+
+### 3.1 App Setup
+
+Key file:
 
 - `backend/app/main.py`
 
 Responsibilities:
 
-- configure FastAPI
-- set Windows event-loop compatibility for local async driver behavior
-- create database tables on startup
-- register CORS
-- mount `health`, `games`, and `auth` routers
+- FastAPI app setup
+- CORS registration
+- startup table creation
+- router registration
 
-### 3.2 Configuration and database
+### 3.2 Configuration
 
-Primary files:
+Key file:
 
 - `backend/app/core/config.py`
-- `backend/app/core/database.py`
 
-Current behavior:
+Current important settings:
 
-- `DATABASE_URL` drives persistence
-- default fallback is local SQLite
-- `DB_AUTO_CREATE` controls startup table creation
-- `APP_ENV` distinguishes development vs production intent
-- on Windows, certain Postgres URLs are normalized for async local development
+- `DATABASE_URL`
+- `DB_AUTO_CREATE`
+- `APP_ENV`
+- `JWT_SECRET`
+- `CORS_ORIGINS`
+
+Current CORS behavior:
+
+- `CORS_ORIGINS` is comma-separated
+- the same env-driven model is used locally and in hosted environments
 
 ### 3.3 Authentication
 
-Primary files:
+Key files:
 
 - `backend/app/api/routes/auth.py`
 - `backend/app/services/auth_service.py`
-- `backend/app/models/user.py`
-- `backend/app/schemas/auth.py`
 
-Implemented auth features:
+Responsibilities:
 
 - register
 - login
-- current user endpoint
-- JWT token creation and validation
-- hashed password verification
+- current-user lookup
+- JWT create/decode
+- password hashing and verification
 
-The current persisted user model includes:
+### 3.4 Live Game Transport
 
-- `id`
-- `username`
-- `email`
-- `hashed_password`
-
-### 3.4 Game transport and live state
-
-Primary files:
+Key files:
 
 - `backend/app/api/routes/games.py`
 - `backend/app/services/connection_manager.py`
 
-Current design:
+Runtime model:
 
-- live lobbies are stored in an in-memory `_lobbies` map
-- WebSockets fan out lobby and game-state updates to connected players
-- player records in memory can also carry authenticated `user_id` bindings
+- live lobbies are kept in `_lobbies`
+- WebSockets keep connected clients in sync
+- roll animation sync is broadcast with `rolling_start` and `rolling_stop`
 
-Important statuses in practice:
+### 3.5 Game Persistence
 
-- `waiting`
-- `active`
-- `paused`
-- `finished` in memory, persisted as `completed`
-- `aborted`
-
-### 3.5 Game persistence
-
-Primary files:
+Key files:
 
 - `backend/app/models/game.py`
 - `backend/app/api/routes/games.py`
 - `backend/app/api/routes/auth.py`
 
-Current persistence model:
-
-- one persisted row per `game_id`
-- user ids can be attached to player slots 1-4
-- winner user id and winner display name are stored when available
-- engine state is serialized for persistence
-
-Persisted game fields include:
+Persisted game data includes:
 
 - `game_id`
 - `player_count`
 - `status`
-- `player_one_user_id` through `player_four_user_id`
-- `player_one_display_name` through `player_four_display_name`
-- `winner_user_id`
-- `winner_display_name`
-- `engine_state_json`
-- `created_at`
-- `ended_at`
+- player 1..4 user ids
+- player 1..4 display names
+- winner user id
+- winner display name
+- serialized engine state
+- timestamps
 
-How `My Games` works:
+Persisted states used in practice:
 
-- the backend reads persisted games linked to the current user
-- then merges currently live in-memory lobbies for that same user
-- the frontend displays the combined result as a table
+- `waiting`
+- `active`
+- `paused`
+- `completed`
+- `aborted`
 
-## 4. Gameplay flow
+### 3.6 Game Restoration
 
-### 4.1 Game creation and join
+Current restore behavior:
 
-Routes:
+- if a game is not in memory, backend can restore saved `active`, `paused`, or `completed` games from DB
+- frontend can reopen older waiting/active/paused games via `My Games`
+- signed-in users can reclaim eligible saved seats
 
-- `POST /games`
-- `POST /games/{game_id}/join`
+Important limitation:
 
-Behavior:
+- true cross-browser/device recovery is reliable for signed-in users
+- guest players can only recover as long as local browser identity is still present
 
-- creator becomes player 1
-- subsequent players join available slots
-- signed-in users send auth tokens so their user ids can be attached to the lobby and persisted game record
+## 4. Current Game Flows
 
-### 4.2 Lobby and ready flow
+### 4.1 Create Game
 
-Route:
+1. Signed-in user clicks `Create 2-Player Game`
+2. Backend creates a waiting lobby and returns creator identity
+3. Frontend opens the lobby popup
+4. User can:
+   - copy the game URL
+   - close the popup and return home
+   - click `Start Game` to mark themselves ready
+
+### 4.2 Start / Ready Flow
+
+Backend route:
 
 - `POST /games/{game_id}/ready`
 
-Behavior:
+Meaning in the current UI:
 
-- players join a lobby
-- once all required players are ready, the game engine state is initialized
-- game status changes from `waiting` to `active`
+- `Start Game` is a ready action, not a force-start button
 
-### 4.3 Active game actions
+Current UX:
 
-Representative routes:
+- host click:
+  - marks host ready
+  - returns host to `My Games`
+  - row shows `Waiting`
+- invited player click:
+  - if host not ready yet, stays in waiting lobby
+  - if host already ready, the game starts and the board loads
+
+### 4.3 Waiting Game Reopen
+
+Current UX:
+
+- waiting games appear in `My Games`
+- clicking the game ID reopens the lobby
+- if the current user already clicked start/ready:
+  - that player row shows `Ready`
+  - start button is hidden
+
+### 4.4 Active Gameplay
+
+Primary backend routes:
 
 - `GET /games/{game_id}`
 - `POST /games/{game_id}/roll`
 - `POST /games/{game_id}/move`
 - `POST /games/{game_id}/pass`
+
+Current frontend behavior:
+
+- active player presses and releases the roll control
+- roll events are mirrored to the opponent
+- if no valid move exists, backend advances the turn with `pass`
+
+### 4.5 Pause / Resume
+
+Primary backend routes:
+
 - `POST /games/{game_id}/pause`
 - `POST /games/{game_id}/resume`
-- `POST /games/{game_id}/reset`
-- `POST /games/{game_id}/claim`
-
-Frontend behavior:
-
-- board shows movable token choices
-- dice panel highlights the primary roll action for the active player
-- pause and reset live beside the dice controls
-
-### 4.4 Pause and resume
 
 Current UX:
 
-- any active player can pause the match
-- paused games appear in `My Games`
-- resuming requires all relevant players to click Resume
-- the paused overlay and `My Games` both surface the resume path
+- signed-in players can pause and persist the game
+- guests are prompted to sign in before pausing/leaving if they want durable recovery
+- all players must click resume
+- once one player resumes, they no longer get the resume action again
+- their `My Games` row shows `Waiting` until the others resume
 
-### 4.5 My Games
+### 4.6 Leave Game
 
-Current UX:
+Current behavior:
 
-- full-screen overlay from the home page
-- sticky top bar with `Close`
-- table layout with:
-  - status
-  - game id
-  - players
-  - winner
-  - created date
-  - action button
+- signed-in user leaving an active game:
+  - best-effort auto-pause before navigation
+- guest leaving via in-app navigation:
+  - sign-in/save prompt
+- browser close/refresh:
+  - only native browser leave warning is possible for guests
 
-Action behavior:
+## 5. My Games as Control Center
 
-- active/waiting games show `Open Game`
-- paused games show `Resume Game`
-- completed and aborted games are listed without a resume/open action
+The intended role of `My Games` today is:
 
-## 5. Board implementation summary
+- reopen waiting lobbies
+- reopen active games
+- reopen paused games
+- copy game URLs for reconnect/resume
+- remove creator-owned games
+- review completed history
 
-Primary file:
+This is why several flows now intentionally return to `My Games` instead of keeping the user in the popup.
 
-- `frontend/src/components/Board.tsx`
+## 6. Deployment Model
 
-Implementation details:
+Current recommended deployment split:
 
-- fixed 15x15 logical board grid
-- numbered outer path positions
-- color yards and home lanes mapped to fixed cells
-- tokens rendered as absolute overlays on top of board cells
-- winner banner and rolling die animation layered on top of the board
+1. backend as a web service
+2. frontend as a static site
 
-## 6. Deployment model
+Frontend env:
 
-Deployment helper files:
+```env
+VITE_API_BASE_URL=https://<backend-service>
+```
 
-- `start.sh`
-- `nixpacks.toml`
-- `railway.json`
+Backend env:
 
-Current backend deployment expectation:
+```env
+DATABASE_URL=<postgres-url>
+DB_AUTO_CREATE=true
+APP_ENV=production
+JWT_SECRET=<secret>
+CORS_ORIGINS=https://<frontend-site>,https://<backend-site>
+```
 
-- a platform starts `start.sh`
-- the script launches the FastAPI app from `backend/`
-- `PORT` comes from the hosting platform
+## 7. Local Development
 
-Recommended production setup:
+### Frontend
 
-- `APP_ENV=production`
-- managed PostgreSQL
-- strong JWT secret
-- frontend served separately or via a static host
+Use a local env file:
 
-## 7. Local development guide
+```env
+VITE_API_BASE_URL=http://127.0.0.1:8080
+```
+
+Run:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
 ### Backend
 
-Windows PowerShell:
+Typical local env:
+
+```env
+APP_ENV=development
+CORS_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:5173,http://localhost:5174
+```
+
+Run:
 
 ```powershell
 cd backend
@@ -349,34 +436,15 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 ```
 
-### Frontend
+## 8. Known Product Constraints
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+- 4-player creation is disabled in the UI
+- guest recovery across a fresh browser/device is not fully durable
+- full frontend production build can be awkward to verify in this sandbox because Vite/esbuild may hit local `EPERM` issues
 
-### Local URLs
+## 9. Recommended Next Technical Work
 
-- frontend: `http://127.0.0.1:5173`
-- backend: `http://127.0.0.1:8080`
-- backend docs: `http://127.0.0.1:8080/docs`
-
-## 8. GitHub push checklist
-
-Before pushing publicly:
-
-1. confirm no secrets are present in tracked files
-2. confirm `backend/.env` is ignored and not staged
-3. confirm local DB files and logs are not intentionally committed unless desired
-4. review README screenshots or examples if you plan to add them
-5. verify the docs reflect the current product state
-
-## 9. Recommended next improvements
-
-- add formal DB migrations instead of relying on startup table creation
-- tighten production CORS around `APP_ENV`
-- add automated backend tests for pause/resume and persistence
-- add frontend smoke tests for login, create game, and `My Games`
-- decide whether the hidden `Chance` mechanic should be removed entirely from the backend rules
+- add formal DB migrations
+- add automated tests for waiting-lobby and pause/resume flows
+- harden roll/turn synchronization further with focused multiplayer regression tests
+- decide whether the hidden backend `chance` mechanic should be removed entirely

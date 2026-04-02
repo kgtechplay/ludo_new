@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
@@ -194,3 +194,32 @@ async def my_games(user=Depends(_current_user), db: AsyncSession = Depends(get_d
         key=lambda item: item.created_at,
         reverse=True,
     )
+
+
+@router.delete("/me/games/{game_id}")
+async def delete_my_game(game_id: str, user=Depends(_current_user), db: AsyncSession = Depends(get_db)):
+    from app.models.game import Game
+    from app.api.routes.games import _lobbies
+
+    lobby = _lobbies.get(game_id)
+    if lobby is not None:
+        host = next((player for player in lobby.players if player.player_index == 0), None)
+        if not host or host.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Only the game creator can delete this game")
+        _lobbies.pop(game_id, None)
+
+    record = (
+        await db.execute(select(Game).where(Game.game_id == game_id))
+    ).scalar_one_or_none()
+
+    if record is None:
+        if lobby is not None:
+            return {"ok": True}
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    if record.player_one_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the game creator can delete this game")
+
+    await db.execute(delete(Game).where(Game.game_id == game_id))
+    await db.commit()
+    return {"ok": True}

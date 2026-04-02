@@ -1,15 +1,14 @@
 # Project Structure
 
-This document describes the current repository layout for Twisted Ludo.
+This document maps the current Twisted Ludo repository and the main responsibilities of each area.
 
-## Top level
+## Top Level
 
 ```text
 .
 |- backend/
 |- docs/
 |- frontend/
-|- scripts/
 |- .gitignore
 |- nixpacks.toml
 |- railway.json
@@ -32,48 +31,60 @@ backend/
 |  |  |- database.py
 |  |- models/
 |  |  |- game.py
-|  |  |- game_record.py
-|  |  |- player.py
 |  |  |- user.py
 |  |- schemas/
 |  |  |- auth.py
 |  |  |- game.py
-|  |  |- player.py
 |  |- services/
 |  |  |- auth_service.py
 |  |  |- connection_manager.py
 |  |  |- game_engine.py
 |  |- main.py
-|- tests/
 |- .env.example
 |- requirements.txt
 ```
 
-### Important backend files
+### Important Backend Files
 
-- `backend/app/main.py`: FastAPI app setup, CORS, and startup table creation.
-- `backend/app/api/routes/auth.py`: register, login, current-user, and `My Games` APIs.
-- `backend/app/api/routes/games.py`: create/join/ready/roll/move/pass/pause/resume/reset APIs plus WebSocket handling.
-- `backend/app/core/config.py`: environment-driven settings, DB URL normalization, and app mode.
-- `backend/app/core/database.py`: SQLAlchemy engine, session, and declarative base.
-- `backend/app/models/user.py`: persisted users table.
-- `backend/app/models/game.py`: persisted games table with user linkage and game status.
-- `backend/app/services/game_engine.py`: Ludo rules engine and game state transitions.
-- `backend/app/services/connection_manager.py`: active WebSocket connection registry.
-- `backend/app/services/auth_service.py`: JWT and password helpers.
+- `backend/app/main.py`
+  - FastAPI app setup
+  - CORS middleware
+  - startup table creation
+- `backend/app/core/config.py`
+  - env-driven settings
+  - DB URL normalization
+  - `CORS_ORIGINS` parsing
+- `backend/app/core/database.py`
+  - async SQLAlchemy engine and session
+- `backend/app/api/routes/auth.py`
+  - register, login, current-user
+  - `GET /auth/me/games`
+  - creator-hosted delete flow for games
+- `backend/app/api/routes/games.py`
+  - create/join/lobby/ready/get state
+  - roll/move/pass/pause/resume/reset
+  - claim seat
+  - DB rehydration of saved games
+  - WebSocket sync and roll events
+- `backend/app/models/user.py`
+  - persisted user accounts
+- `backend/app/models/game.py`
+  - persisted game rows, player-user bindings, winner metadata, serialized engine state
+- `backend/app/services/game_engine.py`
+  - Ludo rules engine and state transitions
+- `backend/app/services/connection_manager.py`
+  - WebSocket room registry and fanout
 
-### Backend notes
+### Backend Runtime Model
 
-- Live lobbies still exist in memory while a game is active.
-- Important game state is also persisted to the database for `My Games` and recovery.
-- Local development may use SQLite or PostgreSQL.
-- Hosted environments should use PostgreSQL.
+- Live lobbies still exist in in-memory `_lobbies`
+- Important game state is also persisted to the database
+- Saved `active`, `paused`, and `completed` games can be restored into memory when needed
 
 ## Frontend
 
 ```text
 frontend/
-|- public/
 |- src/
 |  |- api/
 |  |  |- client.ts
@@ -103,25 +114,48 @@ frontend/
 |  |- main.tsx
 |- index.html
 |- package.json
-|- postcss.config.cjs
-|- tailwind.config.cjs
-|- tsconfig.json
 |- vite.config.ts
 ```
 
-### Important frontend files
+### Important Frontend Files
 
-- `frontend/src/App.tsx`: top-level app routing shell.
-- `frontend/src/pages/HomePage.tsx`: landing page, auth entry, create-game flow, and `My Games` overlay.
-- `frontend/src/pages/GamePage.tsx`: lobby state, active game state, pause/resume/reset controls, and gameplay screen.
-- `frontend/src/components/Board.tsx`: board rendering and token interaction layer.
-- `frontend/src/components/Dice.tsx`: dice actions and current turn UI.
-- `frontend/src/components/LobbyView.tsx`: waiting room and ready/start flow.
-- `frontend/src/components/MyGames.tsx`: full-page table view for persisted and live games.
-- `frontend/src/context/AuthContext.tsx`: frontend auth state.
-- `frontend/src/hooks/useGameSocket.ts`: real-time game updates over WebSocket.
-- `frontend/src/hooks/usePlayerIdentity.ts`: local browser identity storage for a joined game.
-- `frontend/src/api/client.ts`: REST and WebSocket URL helpers.
+- `frontend/src/pages/HomePage.tsx`
+  - landing page
+  - signed-in create flow
+  - top-right `My Games` and `Sign Out`
+  - full-page `My Games` overlay
+- `frontend/src/pages/GamePage.tsx`
+  - boot flow for waiting lobby, active game, paused game, stale game, and auth reclaim
+  - leave/pause/save flow
+  - resume handling
+  - dice animation state
+- `frontend/src/components/LobbyView.tsx`
+  - waiting-room popup
+  - close icon
+  - copy-link icon
+  - player-ready state
+- `frontend/src/components/MyGames.tsx`
+  - responsive mobile cards + desktop table
+  - clickable game ids
+  - copy/delete icon actions
+  - stale-game cleanup
+- `frontend/src/components/Dice.tsx`
+  - roll button state
+  - pause/reset/resume controls
+- `frontend/src/components/Board.tsx`
+  - board render and token interaction
+- `frontend/src/components/PlayerPanel.tsx`
+  - turn and player summary
+- `frontend/src/context/AuthContext.tsx`
+  - auth token and current-user state
+- `frontend/src/hooks/useGameSocket.ts`
+  - socket sync for lobby/game/roll events
+- `frontend/src/hooks/usePlayerIdentity.ts`
+  - local player identity persistence
+  - resume-waiting markers
+- `frontend/src/api/client.ts`
+  - REST helpers
+  - `VITE_API_BASE_URL` driven HTTP + WebSocket URLs
 
 ## Docs
 
@@ -130,27 +164,33 @@ docs/
 |- Implementation Guide.md
 |- STRUCTURE.md
 |- TwistedLudo PRD.md
-|- ludo_board_numbered.svg
 ```
 
-### Docs purpose
+### Doc Roles
 
-- `docs/Implementation Guide.md`: technical overview of how the app works today.
-- `docs/STRUCTURE.md`: repo map and file responsibilities.
-- `docs/TwistedLudo PRD.md`: product requirements and feature intent.
+- `README.md`
+  - repo overview and setup
+- `docs/STRUCTURE.md`
+  - file map and responsibilities
+- `docs/Implementation Guide.md`
+  - current architecture and workflow behavior
+- `docs/TwistedLudo PRD.md`
+  - product goals and intended experience
 
-## Files that should not be pushed accidentally
-
-These are usually local-only and should stay out of GitHub commits:
+## Local-Only Files To Keep Out Of Git
 
 - `backend/.env`
+- `frontend/.env`
+- `frontend/.env.local`
 - `backend/.venv/`
-- `backend/logs/`
 - `frontend/node_modules/`
-- local SQLite database files if not intentionally tracked
+- local logs and scratch files
 
-## Runtime and deployment helpers
+## Deployment Helpers
 
-- `start.sh`: backend startup command for deployment.
-- `nixpacks.toml`: Nixpacks build instructions.
-- `railway.json`: Railway deployment configuration.
+- `start.sh`
+  - backend startup entry for hosted environments
+- `nixpacks.toml`
+  - build config for Nixpacks-style deploys
+- `railway.json`
+  - Railway deployment configuration

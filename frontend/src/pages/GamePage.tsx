@@ -8,13 +8,20 @@ import AuthModal from "../components/AuthModal";
 import { useGameSocket } from "../hooks/useGameSocket";
 import { usePlayerIdentity } from "../hooks/usePlayerIdentity";
 import { saveIdentity } from "../hooks/usePlayerIdentity";
+import { isResumeWaiting } from "../hooks/usePlayerIdentity";
+import { markResumeWaiting } from "../hooks/usePlayerIdentity";
 import { useAuth } from "../context/AuthContext";
 import type { GameState, LobbyState } from "../types/game";
+import type { PlayerIdentity } from "../hooks/usePlayerIdentity";
 import * as api from "../api/client";
 
 const ROLL_FACES = [1, 2, 3, 4, 5, 6] as const;
 const POST_RELEASE_ROLL_MS = 1000;
 const SETTLE_DELAYS_MS = [130, 190, 260];
+const RECONNECT_SIGN_IN_MESSAGE = "Sign in to reclaim your seat and continue.";
+
+type BootPhase = "loading" | "ready" | "needs_auth" | "stale";
+type ExitDestination = "home" | "my-games";
 
 function formatErrorMessage(message: string): string {
   const normalized = message.trim();
@@ -48,21 +55,24 @@ export default function GamePage() {
   // Player identity
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [myPlayerIndex, setMyPlayerIndex] = useState<number | null>(null);
-  const [identityLoaded, setIdentityLoaded] = useState(false);
-  const [joining, setJoining] = useState(false);
+  const [bootPhase, setBootPhase] = useState<BootPhase>("loading");
+  const [requiresAuthToReconnect, setRequiresAuthToReconnect] = useState(false);
   const joinInitiatedRef = useRef(false);
 
   // Lobby / game state (also updated via WebSocket)
   const [lobbyOverride, setLobbyOverride] = useState<LobbyState | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [hasClickedReady, setHasClickedReady] = useState(false);
-  const [myResumeClicked, setMyResumeClicked] = useState(false);
+  const [myResumeClicked, setMyResumeClicked] = useState(() => (gameId ? isResumeWaiting(gameId) : false));
 
   // Game UI state
   const [loading, setLoading] = useState(false);
   const [newGameLoading, setNewGameLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAuth, setShowAuth] = useState(false);
+  const [showPersistPrompt, setShowPersistPrompt] = useState(false);
+  const [pendingExitDestination, setPendingExitDestination] = useState<ExitDestination | null>(null);
+  const [pendingGuestPause, setPendingGuestPause] = useState(false);
   const [displayRoll, setDisplayRoll] = useState<number | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedMove, setSelectedMove] = useState<{ color: string; tokenIndex: number } | null>(null);
@@ -77,6 +87,38 @@ export default function GamePage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const noiseBufferRef = useRef<AudioBuffer | null>(null);
   const soundIntervalRef = useRef<number | null>(null);
+  const autoPauseInFlightRef = useRef(false);
+
+  const finishExitNavigation = useCallback((destination: ExitDestination) => {
+    if (destination === "my-games") {
+      navigate("/?view=my-games");
+      return;
+    }
+    const isPaused = game?.status === "paused";
+    navigate("/", isPaused && gameId ? { state: { joinGameId: gameId } } : undefined);
+  }, [navigate, game, gameId]);
+
+  const applyIdentity = useCallback(
+    (identity: PlayerIdentity) => {
+      saveId(identity);
+      setPlayerId(identity.playerId);
+      setMyPlayerIndex(identity.playerIndex);
+    },
+    [saveId]
+  );
+
+  const enterReconnectGate = useCallback((message = RECONNECT_SIGN_IN_MESSAGE) => {
+    setRequiresAuthToReconnect(true);
+    setShowAuth(true);
+    setError(message);
+    setBootPhase("needs_auth");
+  }, []);
+
+  const isReconnectAuthError = useCallback((message: string) => (
+    message.includes("Game is full") ||
+    message.includes("Game already started") ||
+    message.includes("Unknown player for this game")
+  ), []);
 
   // On mount: load or join
   useEffect(() => {
@@ -84,9 +126,65 @@ export default function GamePage() {
     let ignored = false;
     const existing = loadIdentity();
     if (existing) {
-      setPlayerId(existing.playerId);
-      setMyPlayerIndex(existing.playerIndex);
-      setIdentityLoaded(true);
+      const bootWithExistingIdentity = async () => {
+        if (ignored) return;
+        try {
+          if (token && user?.username) {
+            const rejoined = await api.joinGame(gameId, user.username, token);
+            if (ignored) return;
+            const identity = {
+              playerId: rejoined.player_id,
+              playerIndex: rejoined.player_index,
+              color: rejoined.color,
+            };
+            applyIdentity(identity);
+            setLobbyOverride(rejoined.lobby);
+            if (rejoined.lobby.status === "waiting") {
+              setGame(null);
+              setError(null);
+              setRequiresAuthToReconnect(false);
+              setBootPhase("ready");
+              return;
+            }
+            const restoredGame = await api.getGame(gameId, identity.playerId, token);
+            if (ignored) return;
+            setGame(restoredGame);
+          } else {
+            const lobbyState = await api.getLobby(gameId, existing.playerId, token);
+            if (ignored) return;
+            applyIdentity(existing);
+            setLobbyOverride(lobbyState);
+            if (lobbyState.status !== "waiting") {
+              const restoredGame = await api.getGame(gameId, existing.playerId, token);
+              if (ignored) return;
+              setGame(restoredGame);
+            } else {
+              setGame(null);
+            }
+          }
+          if (ignored) return;
+          setRequiresAuthToReconnect(false);
+          setError(null);
+          setBootPhase("ready");
+        } catch (e) {
+          if (ignored) return;
+          const message = e instanceof Error ? e.message : "Failed to reconnect";
+          if (message.includes("Game not found")) {
+            setError(message);
+            setBootPhase("stale");
+            return;
+          }
+          if (!token && isReconnectAuthError(message)) {
+            setPlayerId(null);
+            setMyPlayerIndex(null);
+            enterReconnectGate();
+            return;
+          }
+          setError(message);
+          setBootPhase("ready");
+        }
+      };
+      void bootWithExistingIdentity();
       return;
     }
 
@@ -101,47 +199,63 @@ export default function GamePage() {
         if (ignored) return;
         setPlayerId(identity.playerId);
         setMyPlayerIndex(identity.playerIndex);
-        setIdentityLoaded(true);
-        setJoining(false);
+        setBootPhase("ready");
       }, 30);
       return () => { ignored = true; window.clearInterval(iv); };
     }
 
     joinInitiatedRef.current = true;
-    setJoining(true);
-    api.joinGame(gameId, "Player", token).then((result) => {
+    api.joinGame(gameId, user?.username ?? "Player", token).then((result) => {
+      setRequiresAuthToReconnect(false);
       const identity = {
         playerId: result.player_id,
         playerIndex: result.player_index,
         color: result.color,
       };
-      // Save identity before checking ignored so the polling branch above
-      // can pick it up even when this mount was already cleaned up.
-      saveId(identity);
+      applyIdentity(identity);
       if (ignored) return;
-      setPlayerId(result.player_id);
-      setMyPlayerIndex(result.player_index);
       setLobbyOverride(result.lobby);
-      setIdentityLoaded(true);
+      setGame(null);
+      setError(null);
+      setBootPhase("ready");
     }).catch((e) => {
       if (ignored) return;
+      const message = e instanceof Error ? e.message : "Failed to join game";
+      if (!token && isReconnectAuthError(message)) {
+        joinInitiatedRef.current = false;
+        enterReconnectGate();
+        return;
+      }
       const retry = loadIdentity();
       if (retry) {
         setPlayerId(retry.playerId);
         setMyPlayerIndex(retry.playerIndex);
-        setIdentityLoaded(true);
+        setBootPhase("ready");
         return;
       }
-      setError(e instanceof Error ? e.message : "Failed to join game");
-      setIdentityLoaded(true);
-    }).finally(() => { if (!ignored) setJoining(false); });
+      setError(message);
+      setBootPhase(message.includes("Game not found") ? "stale" : "ready");
+    });
 
     return () => { ignored = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameId]);
+  }, [gameId, token, user?.username, applyIdentity, enterReconnectGate, isReconnectAuthError]);
+
+  useEffect(() => {
+    if (!token) return;
+    setShowAuth(false);
+    if (requiresAuthToReconnect) {
+      setRequiresAuthToReconnect(false);
+      setError(null);
+      setBootPhase("loading");
+    }
+  }, [token, requiresAuthToReconnect]);
 
   const handleWsGameState = useCallback((gs: GameState) => {
     setGame(gs);
+    if (gs.status === "active" || gs.status === "finished") {
+      markResumeWaiting(gs.id, false);
+    }
     if (gs.status === "active") {
       setDisplayRoll(gs.last_roll);
     }
@@ -152,22 +266,42 @@ export default function GamePage() {
     setLobbyOverride(lobby);
     setHasClickedReady(false);
     setDisplayRoll(null);
-  }, []);
+    if (gameId) {
+      markResumeWaiting(gameId, false);
+      setMyResumeClicked(false);
+    }
+  }, [gameId]);
 
-  const { lobbyState: wsLobby, gameState: wsGame, opponentRolling, resumeReadyCount, resumeNeeded, sendMessage } = useGameSocket(
+  const socketState = useGameSocket(
     gameId ?? "",
-    identityLoaded ? playerId : null,
+    bootPhase === "ready" ? playerId : null,
     handleWsGameState,
     handleWsGameReset
   );
+  const wsLobby = socketState.lobbyState;
+  const wsGame = socketState.gameState;
+  const connectionStatus = socketState.connectionStatus;
+  const opponentRolling = socketState.opponentRolling;
+  const resumeReadyCount = socketState.resumeReadyCount;
+  const resumeNeeded = socketState.resumeNeeded;
+  const sendMessage = socketState.sendMessage;
 
   // WS game state takes priority over local state
   useEffect(() => {
     if (wsGame) {
       setGame(wsGame);
-      if (wsGame.status !== "paused") setMyResumeClicked(false);
+      if (wsGame.status !== "paused") {
+        setMyResumeClicked(false);
+      } else if (gameId && isResumeWaiting(gameId)) {
+        setMyResumeClicked(true);
+      }
     }
   }, [wsGame]);
+
+  useEffect(() => {
+    if (!gameId) return;
+    setMyResumeClicked(isResumeWaiting(gameId));
+  }, [gameId]);
 
 
   // Opponent rolling animation
@@ -178,9 +312,10 @@ export default function GamePage() {
   useEffect(() => {
     const wasRolling = prevOpponentRolling.current;
     prevOpponentRolling.current = opponentRolling;
-    if (isMyTurn) return;
     if (opponentRolling && !wasRolling) {
-      startRollAnimation();
+      if (!isMyTurn) {
+        startRollAnimation();
+      }
     } else if (!opponentRolling && wasRolling) {
       if (wsGame?.last_roll != null) {
         const roll = wsGame.last_roll;
@@ -203,7 +338,98 @@ export default function GamePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsGame?.last_roll]);
 
-  const lobby = lobbyOverride ?? wsLobby;
+  const lobby = wsLobby ?? lobbyOverride;
+
+  useEffect(() => {
+    if (connectionStatus !== "disconnected") return;
+    if (!playerId || lobby || game || error) return;
+    if (!token) {
+      setPlayerId(null);
+      setMyPlayerIndex(null);
+      enterReconnectGate();
+    }
+  }, [connectionStatus, playerId, lobby, game, error, token, enterReconnectGate]);
+
+  useEffect(() => {
+    if (!pendingExitDestination || !token || game?.status !== "active") return;
+    let cancelled = false;
+    const persistAndLeave = async () => {
+      try {
+        if (playerId) {
+          await api.pauseGame(gameId ?? "", playerId, token);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to pause game");
+        }
+      } finally {
+        if (!cancelled) {
+          setShowPersistPrompt(false);
+          const destination = pendingExitDestination;
+          setPendingExitDestination(null);
+          finishExitNavigation(destination);
+        }
+      }
+    };
+    void persistAndLeave();
+    return () => { cancelled = true; };
+  }, [pendingExitDestination, token, game?.status, playerId, gameId, finishExitNavigation]);
+
+  useEffect(() => {
+    if (!pendingGuestPause || !token || game?.status !== "active" || !gameId || !playerId) return;
+    let cancelled = false;
+    const persistPause = async () => {
+      setLoading(true);
+      try {
+        await api.pauseGame(gameId, playerId, token);
+        if (!cancelled) {
+          setPendingGuestPause(false);
+          setShowPersistPrompt(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to pause game");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void persistPause();
+    return () => { cancelled = true; };
+  }, [pendingGuestPause, token, game?.status, gameId, playerId]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (game?.status !== "active") return;
+      if (!token) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+
+    const handlePageHide = () => {
+      if (!gameId || !playerId || !token || game?.status !== "active") return;
+      const body = new Uint8Array();
+      void fetch(`${api.getApiBaseUrl()}/games/${gameId}/pause`, {
+        method: "POST",
+        keepalive: true,
+        headers: {
+          "X-Player-ID": playerId,
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+      }).catch(() => undefined);
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [game?.status, gameId, playerId, token]);
 
   // -----------------------------------------------------------------------
   // Audio helpers (unchanged from App.tsx)
@@ -334,6 +560,23 @@ export default function GamePage() {
     game.status === "active" &&
     myPlayerIndex !== null &&
     game.current_player_index === myPlayerIndex;
+
+  useEffect(() => {
+    if (!game || game.status !== "active") return;
+    if (opponentRolling) return;
+    if (rollActiveRef.current) return;
+    if (game.has_rolled) return;
+    pendingOpponentSettleRef.current = false;
+    if (isRollingDice || boardRollVisible) {
+      resetRollVisuals();
+    }
+  }, [
+    game,
+    opponentRolling,
+    isRollingDice,
+    boardRollVisible,
+    resetRollVisuals,
+  ]);
 
   // -----------------------------------------------------------------------
   // Game action handlers
@@ -488,15 +731,34 @@ export default function GamePage() {
     if (!gameId || !playerId) return;
     setHasClickedReady(true);
     try {
-      await api.markReady(gameId, playerId, token);
+      const updatedLobby = await api.markReady(gameId, playerId, token);
+      setLobbyOverride(updatedLobby);
+
+      if (myPlayerIndex === 0) {
+        navigate("/?view=my-games");
+        return;
+      }
+
+      if (updatedLobby.status === "active") {
+        const startedGame = await api.getGame(gameId, playerId, token);
+        setGame(startedGame);
+        setLobbyOverride(null);
+        return;
+      }
     } catch (e) {
       setHasClickedReady(false);
       setError(e instanceof Error ? e.message : "Failed to mark ready");
     }
-  }, [gameId, playerId, token]);
+  }, [gameId, playerId, token, navigate, myPlayerIndex]);
 
   const handlePause = useCallback(async () => {
     if (!gameId || !playerId) return;
+    if (!token) {
+      setPendingExitDestination(null);
+      setPendingGuestPause(true);
+      setShowPersistPrompt(true);
+      return;
+    }
     setLoading(true);
     try {
       await api.pauseGame(gameId, playerId, token);
@@ -512,14 +774,20 @@ export default function GamePage() {
     setMyResumeClicked(true);
     setLoading(true);
     try {
-      await api.resumeGame(gameId, playerId, token);
+      const nextState = await api.resumeGame(gameId, playerId, token);
+      if (nextState.status === "paused") {
+        markResumeWaiting(gameId, true);
+        navigate("/?view=my-games");
+        return;
+      }
+      markResumeWaiting(gameId, false);
     } catch (e) {
       setMyResumeClicked(false);
       setError(e instanceof Error ? e.message : "Failed to resume game");
     } finally {
       setLoading(false);
     }
-  }, [gameId, playerId, token, myResumeClicked]);
+  }, [gameId, playerId, token, myResumeClicked, navigate]);
 
   const handleReset = useCallback(async () => {
     if (!gameId || !playerId) return;
@@ -537,14 +805,39 @@ export default function GamePage() {
     }
   }, [gameId, playerId, token]);
 
+  const autoPauseCurrentGame = useCallback(async () => {
+    if (!gameId || !playerId || !token || game?.status !== "active" || autoPauseInFlightRef.current) return;
+    autoPauseInFlightRef.current = true;
+    try {
+      await api.pauseGame(gameId, playerId, token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to pause game");
+    } finally {
+      autoPauseInFlightRef.current = false;
+    }
+  }, [gameId, playerId, token, game?.status]);
+
+  const requestLeave = useCallback(async (destination: ExitDestination) => {
+    if (game?.status !== "active") {
+      finishExitNavigation(destination);
+      return;
+    }
+    if (token) {
+      await autoPauseCurrentGame();
+      finishExitNavigation(destination);
+      return;
+    }
+    setPendingExitDestination(destination);
+    setShowPersistPrompt(true);
+  }, [autoPauseCurrentGame, finishExitNavigation, game?.status, token]);
+
   const goHome = useCallback(() => {
-    const isPaused = game?.status === "paused";
-    navigate("/", isPaused && gameId ? { state: { joinGameId: gameId } } : undefined);
-  }, [navigate, game, gameId]);
+    void requestLeave("home");
+  }, [requestLeave]);
 
   const goToMyGames = useCallback(() => {
-    navigate("/?view=my-games");
-  }, [navigate, token]);
+    void requestLeave("my-games");
+  }, [requestLeave]);
 
   // -----------------------------------------------------------------------
   // Render helpers
@@ -564,7 +857,7 @@ export default function GamePage() {
   // -----------------------------------------------------------------------
   // Loading / error states
   // -----------------------------------------------------------------------
-  if (!identityLoaded || joining) {
+  if (bootPhase === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900">
         <p className="text-slate-400">Joining game…</p>
@@ -573,6 +866,66 @@ export default function GamePage() {
   }
 
   if (!gameId) return null;
+
+  if (bootPhase === "needs_auth") {
+    return (
+      <>
+        <div className="flex min-h-screen items-center justify-center bg-slate-900 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-800/90 p-6 text-center shadow-2xl">
+            <h1 className="text-2xl font-semibold text-white">Resume Saved Game</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              This game already has players assigned. Sign in to reclaim your seat and continue.
+            </p>
+            {errorMessage && (
+              <p className="mt-4 rounded-xl bg-red-950/80 px-4 py-3 text-sm text-red-200">
+                {errorMessage}
+              </p>
+            )}
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAuth(true)}
+                className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+              >
+                Back Home
+              </button>
+            </div>
+          </div>
+        </div>
+        {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      </>
+    );
+  }
+
+  if (bootPhase === "stale") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-900 px-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-800/90 p-6 text-center shadow-2xl">
+          <h1 className="text-2xl font-semibold text-white">Game Unavailable</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-300">
+            This game does not exist any longer.
+          </p>
+          {gameId && <p className="mt-2 break-all text-xs text-slate-500">{gameId}</p>}
+          <div className="mt-6 flex justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+            >
+              Back Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Identity loaded but WebSocket hasn't synced lobby/game state yet.
   // Without this guard, Player 2 would land on the empty game view and
@@ -601,13 +954,11 @@ export default function GamePage() {
         )}
         <LobbyView
           lobby={lobby}
-          myPlayerId={playerId ?? ""}
+          myPlayerIndex={myPlayerIndex}
           onReady={() => void handleReady()}
           hasClickedReady={hasClickedReady}
-          onNewGame={(count) => void handleNewGame(count)}
-          newGameLoading={newGameLoading}
-          isHost={myPlayerIndex === 0}
           onSignIn={() => setShowAuth(true)}
+          onClose={() => navigate("/")}
         />
         {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
       </>
@@ -619,6 +970,59 @@ export default function GamePage() {
   // -----------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
+      {showPersistPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <h2 className="text-xl font-semibold text-white">
+              {pendingGuestPause ? "Save This Game Before Pausing?" : "Save This Game Before Leaving?"}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              {pendingGuestPause
+                ? "Sign in so we can save your seat against your account and pause the current game. Then you can reopen the same URL later and continue from this exact state."
+                : "Sign in so we can save your seat against your account and pause the current game before you leave. Then you can reopen the same URL later and continue from this exact state."}
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingExitDestination(null);
+                  setPendingGuestPause(false);
+                  setShowPersistPrompt(false);
+                }}
+                className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+              >
+                {pendingGuestPause ? "Keep Playing" : "Stay Here"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const destination = pendingExitDestination;
+                  setPendingExitDestination(null);
+                  setPendingGuestPause(false);
+                  setShowPersistPrompt(false);
+                  if (destination) {
+                    finishExitNavigation(destination);
+                  }
+                }}
+                disabled={pendingGuestPause}
+                className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600"
+              >
+                Leave Anyway
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPersistPrompt(false);
+                  setShowAuth(true);
+                }}
+                className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+              >
+                Sign In To Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {errorMessage && (
         <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
           <div className="pointer-events-auto flex max-w-xl items-start gap-3 rounded-2xl border border-red-300/35 bg-red-950/90 px-4 py-3 text-sm text-red-100 shadow-[0_18px_32px_rgba(0,0,0,0.4)] backdrop-blur">
@@ -686,14 +1090,16 @@ export default function GamePage() {
                   My Games
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => void handleResume()}
-                disabled={loading || myResumeClicked}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-              >
-                {myResumeClicked ? "Ready ✓" : "Resume"}
-              </button>
+              {!myResumeClicked && (
+                <button
+                  type="button"
+                  onClick={() => void handleResume()}
+                  disabled={loading}
+                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  Resume
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -764,6 +1170,7 @@ export default function GamePage() {
           <PlayerPanel game={game} myPlayerIndex={myPlayerIndex ?? undefined} />
         </aside>
       </main>
+      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
     </div>
   );
 }

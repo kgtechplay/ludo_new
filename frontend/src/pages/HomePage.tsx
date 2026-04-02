@@ -119,8 +119,8 @@ export default function HomePage() {
               </button>
               <button
                 onClick={() => void handleCreate(4)}
-                disabled={loading}
-                className="rounded-xl bg-indigo-500 py-3 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
+                disabled
+                className="rounded-xl bg-slate-700 py-3 text-sm font-semibold text-slate-400 disabled:cursor-not-allowed disabled:opacity-100"
               >
                 Create 4-Player Game
               </button>

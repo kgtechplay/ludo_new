@@ -1,28 +1,79 @@
 # Twisted Ludo
 
-Twisted Ludo is a full-stack online Ludo game with account-based history, resumable multiplayer matches, live game updates over WebSockets, and a responsive React UI.
+Twisted Ludo is a full-stack online Ludo app with account-based history, resumable multiplayer matches, real-time updates over WebSockets, and a responsive React UI for laptop, tablet, and mobile browsers.
 
-## What is in this repo
+## Current Product Snapshot
+
+- 2-player online play is the primary supported mode
+- 4-player creation is currently disabled in the UI
+- Logged-out users see a single centered `Sign In` entry point
+- Signed-in users can create a game, manage `My Games`, and sign out
+- New games open into a lobby popup with:
+  - copy-link icon
+  - close icon
+  - player readiness
+- Host clicking `Start Game` marks the host ready and returns them to `My Games`
+- Invited players clicking `Start Game` either:
+  - remain in the waiting lobby if the host is not ready yet, or
+  - go straight to the game board if their click starts the match
+- `My Games` shows waiting, in-progress, paused, completed, and aborted games
+- Game IDs are the primary open/rejoin action in `My Games`
+- Paused games require all players to resume before becoming active again
+- Signed-in players can reclaim persisted seats from saved game URLs
+
+## Repo Layout
 
 - `frontend/`: React + Vite + TypeScript + Tailwind client
-- `backend/`: FastAPI + SQLAlchemy backend with WebSocket game updates
-- `docs/`: product, structure, and implementation documentation
-- `scripts/`: helper scripts and generated assets
+- `backend/`: FastAPI + SQLAlchemy backend with WebSocket updates
+- `docs/`: product, structure, and implementation docs
 
-## Current product features
+## Core Flows
 
-- Landing page with a single central sign-in CTA for logged-out users
-- Username/email/password authentication
-- Create 2-player and 4-player games
-- Join games via invite link or game id when logged out
-- Live lobby with ready/start flow
-- Real-time gameplay updates over WebSockets
-- Pause and resume flow for multiplayer games
-- `My Games` full-screen overlay with active, paused, completed, and aborted games
-- Database-backed game persistence tied to signed-in users
-- Responsive layouts for desktop and mobile browsers
+### Home
 
-## Tech stack
+- Logged out:
+  - centered `Sign In` button
+  - join-by-link flow
+- Logged in:
+  - `Create 2-Player Game`
+  - top-right `My Games`
+  - top-right `Sign Out`
+
+### Lobby
+
+- Opening a newly created game shows the lobby popup
+- The lobby includes:
+  - close icon
+  - share-link copy icon
+  - player readiness list
+- Closing the lobby returns the user to home
+- The game remains available in `My Games`
+
+### My Games
+
+- Full-page overlay from the home page
+- Responsive:
+  - mobile card layout
+  - desktop table layout
+- Statuses:
+  - `Waiting`
+  - `In Progress`
+  - `Paused`
+  - `Completed`
+  - `Aborted`
+- Actions:
+  - click game ID to open/rejoin waiting, active, or paused games
+  - copy-link icon for active/paused games
+  - delete icon for creator/host only
+
+### Pause / Resume
+
+- Signed-in players leaving an active game are auto-paused when possible
+- Guests are prompted to sign in before pausing/leaving if they want the game saved to their account
+- Resuming a paused game requires all players to click resume
+- After one player resumes, `My Games` shows that row as `Waiting` for that player
+
+## Tech Stack
 
 ### Frontend
 
@@ -37,23 +88,17 @@ Twisted Ludo is a full-stack online Ludo game with account-based history, resuma
 - FastAPI
 - SQLAlchemy async
 - PostgreSQL or SQLite
-- `asyncpg` / `psycopg`
 - JWT auth
 - WebSockets
 
-## Local development
+## Local Development
 
 ### Prerequisites
 
 - Node.js 18+
 - Python 3.13 recommended for local backend work on Windows
-- npm
 
-### Backend setup
-
-1. Create `backend/.env` from `backend/.env.example`
-2. Update the database connection and JWT secret
-3. Create a virtual environment and install dependencies
+### Backend
 
 Windows PowerShell:
 
@@ -65,85 +110,66 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 ```
 
-macOS / Linux:
-
-```bash
-cd backend
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
-```
-
-### Frontend setup
+### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-The frontend runs on `http://127.0.0.1:5173` by default.
+## Environment Variables
 
-## Environment variables
+### Frontend
 
-Backend variables live in `backend/.env`.
-
-Example:
+Create a local-only env file such as `frontend/.env` or `frontend/.env.local`:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://ludo_user:password@localhost:5432/ludo_db
+VITE_API_BASE_URL=http://127.0.0.1:8080
+```
+
+All frontend HTTP and WebSocket traffic is derived from `VITE_API_BASE_URL`.
+
+### Backend
+
+Backend env vars live in `backend/.env`.
+
+Typical local example:
+
+```env
+DATABASE_URL=postgresql+psycopg://user:password@host:5432/dbname
 DB_AUTO_CREATE=true
 APP_ENV=development
-JWT_SECRET=change-me-in-production
+JWT_SECRET=change-me
+CORS_ORIGINS=http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:5173,http://localhost:5174
 ```
 
-Important notes:
+Notes:
 
-- If `DATABASE_URL` is not provided, the backend falls back to local SQLite.
-- On Windows, the backend normalizes certain `postgresql+psycopg://` URLs to an async driver form for local development.
-- `DB_AUTO_CREATE=true` allows SQLAlchemy to create missing tables on startup.
+- `APP_ENV` is currently a useful environment marker for development vs production intent
+- `CORS_ORIGINS` is comma-separated and used in both local and hosted environments
+- local fallback DB behavior still exists, but PostgreSQL is preferred for persistence testing
 
-## Default local ports
+## Default Local URLs
 
-- Frontend: `5173`
-- Backend: `8080`
+- Frontend: `http://127.0.0.1:5173`
+- Backend: `http://127.0.0.1:8080`
+- Backend docs: `http://127.0.0.1:8080/docs`
 
-## Deployment notes
+## Deployment Notes
 
-This repo already includes:
+Recommended Render-style split:
 
-- `start.sh`
-- `nixpacks.toml`
-- `railway.json`
+1. Backend as a Web Service
+2. Frontend as a Static Site
 
-These files support backend deployment on platforms such as Railway and similar Nixpacks-based hosts.
+Important production settings:
 
-Production recommendations:
-
-- Use managed PostgreSQL
-- Set a strong `JWT_SECRET`
-- Do not commit `.env`
-- Keep `APP_ENV=production` in hosted environments
-
-## Before pushing to GitHub
-
-Recommended checks:
-
-1. Make sure `.env` files are not staged
-2. Remove or ignore local runtime artifacts such as `backend/.venv/`, `backend/logs/`, and `frontend/node_modules/`
-3. Verify the README matches the current product behavior
-4. Confirm database credentials are not hardcoded anywhere in tracked files
-
-Useful commands:
-
-```bash
-git status
-git add .
-git commit -m "Prepare repo for GitHub"
-git remote add origin <your-github-repo-url>
-git push -u origin main
-```
+- frontend `VITE_API_BASE_URL=https://<backend-service>`
+- backend `DATABASE_URL=<managed-postgres-url>`
+- backend `JWT_SECRET=<strong-secret>`
+- backend `APP_ENV=production`
+- backend `CORS_ORIGINS=https://<frontend-site>,https://<backend-site>`
 
 ## Documentation
 

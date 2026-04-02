@@ -9,9 +9,14 @@ export interface PlayerIdentity {
 
 // Single slot — creating a new game always overwrites the previous one.
 const STORAGE_KEY = "ludo_active_game";
+const RESUME_WAITING_KEY = "ludo_resume_waiting";
 
 interface StoredEntry extends PlayerIdentity {
   gameId: string;
+}
+
+export function buildRestoredPlayerId(gameId: string, playerIndex: number): string {
+  return `restored:${gameId}:${playerIndex}`;
 }
 
 export function loadStoredIdentityEntry(): StoredEntry | null {
@@ -29,6 +34,34 @@ export function clearStoredIdentityEntry(gameId?: string): void {
   if (!entry) return;
   if (gameId && entry.gameId !== gameId) return;
   localStorage.removeItem(STORAGE_KEY);
+}
+
+function loadResumeWaitingMap(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(RESUME_WAITING_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function saveResumeWaitingMap(map: Record<string, boolean>): void {
+  localStorage.setItem(RESUME_WAITING_KEY, JSON.stringify(map));
+}
+
+export function markResumeWaiting(gameId: string, waiting: boolean): void {
+  const current = loadResumeWaitingMap();
+  if (waiting) {
+    current[gameId] = true;
+  } else {
+    delete current[gameId];
+  }
+  saveResumeWaitingMap(current);
+}
+
+export function isResumeWaiting(gameId: string): boolean {
+  return Boolean(loadResumeWaitingMap()[gameId]);
 }
 
 export function loadIdentity(gameId: string): PlayerIdentity | null {

@@ -7,8 +7,12 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+export function getApiBaseUrl(): string {
+  return normalizeBaseUrl(RAW_API_BASE_URL);
+}
+
 function getApiBaseCandidates(): string[] {
-  return [normalizeBaseUrl(RAW_API_BASE_URL)];
+  return [getApiBaseUrl()];
 }
 
 async function handleFetchError(e: unknown, fallback: string): Promise<never> {
@@ -83,10 +87,13 @@ function withAuth(
 }
 
 export function getWsUrl(gameId: string, playerId: string): string {
-  const wsOrigin = typeof window !== "undefined"
-    ? window.location.origin.replace(/^http/, "ws")
-    : "ws://127.0.0.1:8080";
-  return `${wsOrigin}/games/${gameId}/ws?player_id=${playerId}`;
+  const baseUrl = getApiBaseUrl();
+  const wsBase = baseUrl
+    ? baseUrl.replace(/^http/i, "ws")
+    : typeof window !== "undefined"
+      ? window.location.origin.replace(/^http/i, "ws")
+      : "ws://127.0.0.1:8080";
+  return `${wsBase}/games/${gameId}/ws?player_id=${playerId}`;
 }
 
 export async function fetchHealth(): Promise<{ status: string }> {
@@ -140,10 +147,38 @@ export async function markReady(
   );
 }
 
-export async function getGame(gameId: string): Promise<import("../types/game").GameState> {
+export async function getGame(
+  gameId: string,
+  playerId?: string | null,
+  token?: string | null
+): Promise<import("../types/game").GameState> {
   return requestJson<import("../types/game").GameState>(
     `/games/${gameId}`,
-    { cache: "no-store" },
+    {
+      cache: "no-store",
+      headers: withAuth(
+        playerId ? { "X-Player-ID": playerId } : {},
+        token
+      ),
+    },
+    "Game not found"
+  );
+}
+
+export async function getLobby(
+  gameId: string,
+  playerId?: string | null,
+  token?: string | null
+): Promise<import("../types/game").LobbyState> {
+  return requestJson<import("../types/game").LobbyState>(
+    `/games/${gameId}/lobby`,
+    {
+      cache: "no-store",
+      headers: withAuth(
+        playerId ? { "X-Player-ID": playerId } : {},
+        token
+      ),
+    },
     "Game not found"
   );
 }
@@ -250,6 +285,17 @@ export async function fetchMyGames(token: string): Promise<import("../types/game
     "/auth/me/games",
     { headers: { Authorization: `Bearer ${token}` } },
     "Failed to fetch game history"
+  );
+}
+
+export async function deleteMyGame(gameId: string, token: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(
+    `/auth/me/games/${gameId}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+    "Failed to delete game"
   );
 }
 

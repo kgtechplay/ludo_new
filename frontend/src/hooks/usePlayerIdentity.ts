@@ -24,6 +24,13 @@ export function loadStoredIdentityEntry(): StoredEntry | null {
   }
 }
 
+export function clearStoredIdentityEntry(gameId?: string): void {
+  const entry = loadStoredIdentityEntry();
+  if (!entry) return;
+  if (gameId && entry.gameId !== gameId) return;
+  localStorage.removeItem(STORAGE_KEY);
+}
+
 export function loadIdentity(gameId: string): PlayerIdentity | null {
   const entry = loadStoredIdentityEntry();
   if (!entry || entry.gameId !== gameId) return null;

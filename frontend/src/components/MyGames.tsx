@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { claimGame, fetchMyGames } from "../api/client";
-import { loadStoredIdentityEntry } from "../hooks/usePlayerIdentity";
+import { claimGame, fetchMyGames, getGame } from "../api/client";
+import { clearStoredIdentityEntry, loadStoredIdentityEntry } from "../hooks/usePlayerIdentity";
 import type { GameHistoryItem } from "../types/game";
 
 const COLOR_DOT: Record<string, string> = {
@@ -50,6 +50,8 @@ export default function MyGames() {
   const navigate = useNavigate();
   const [games, setGames] = useState<GameHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [staleGame, setStaleGame] = useState<GameHistoryItem | null>(null);
+  const [openingGameId, setOpeningGameId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -81,8 +83,57 @@ export default function MyGames() {
     );
   }
 
+  const handleDismissStaleGame = () => {
+    if (!staleGame) return;
+    clearStoredIdentityEntry(staleGame.game_id);
+    setGames((current) => current.filter((game) => game.game_id !== staleGame.game_id));
+    setStaleGame(null);
+  };
+
+  const handleOpenGame = async (game: GameHistoryItem) => {
+    setOpeningGameId(game.game_id);
+    try {
+      await getGame(game.game_id);
+      navigate(`/${game.game_id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to open game";
+      if (message.includes("Game not found")) {
+        setStaleGame(game);
+        return;
+      }
+      if (message.includes("Game has not started yet")) {
+        navigate(`/${game.game_id}`);
+        return;
+      }
+      throw error;
+    } finally {
+      setOpeningGameId(null);
+    }
+  };
+
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_24px_60px_rgba(2,6,23,0.45)]">
+    <>
+      {staleGame && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white">Game Unavailable</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              This game does not exist any longer.
+            </p>
+            <p className="mt-2 break-all text-xs text-slate-500">{staleGame.game_id}</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={handleDismissStaleGame}
+                className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_24px_60px_rgba(2,6,23,0.45)]">
       <div className="overflow-x-auto">
         <table className="min-w-full table-fixed border-collapse">
           <thead className="bg-slate-900">
@@ -134,11 +185,12 @@ export default function MyGames() {
                 <td className="px-5 py-4">
                   {(game.status === "paused" || game.status === "active" || game.status === "waiting") ? (
                     <button
-                      onClick={() => navigate(`/${game.game_id}`)}
-                      className="rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+                      onClick={() => void handleOpenGame(game)}
+                      className="rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
                       type="button"
+                      disabled={openingGameId === game.game_id}
                     >
-                      {game.status === "paused" ? "Resume Game" : "Open Game"}
+                      {openingGameId === game.game_id ? "Opening..." : game.status === "paused" ? "Resume Game" : "Open Game"}
                     </button>
                   ) : (
                     <span className="text-sm text-slate-500">-</span>
@@ -149,6 +201,7 @@ export default function MyGames() {
           </tbody>
         </table>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

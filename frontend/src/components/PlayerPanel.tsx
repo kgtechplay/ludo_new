@@ -28,12 +28,25 @@ export default function PlayerPanel({ game, myPlayerIndex }: PlayerPanelProps) {
   const activeColors = game.active_colors.length ? game.active_colors : COLORS.slice(0, game.player_count);
   const currentColor = activeColors[game.current_player_index];
   const winnerColor = game.winner_index != null ? activeColors[game.winner_index] : null;
+  const myColor = myPlayerIndex !== undefined && myPlayerIndex !== null
+    ? activeColors[myPlayerIndex] ?? null
+    : null;
+  const myPlayerName = myPlayerIndex !== undefined && myPlayerIndex !== null
+    ? game.players.find((player) => player.player_index === myPlayerIndex)?.display_name ?? null
+    : null;
 
   return (
     <section className="rounded-2xl bg-slate-800 p-5 shadow-lg">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Players
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Players
+        </h2>
+        {myColor && (
+          <span className="rounded-full border border-slate-600 bg-slate-700 px-3 py-1 text-xs font-semibold tracking-wide text-slate-200">
+            {myPlayerName ? `${myPlayerName} · ` : ""}You are {myColor.charAt(0).toUpperCase() + myColor.slice(1)}
+          </span>
+        )}
+      </div>
       <ul className="mt-4 space-y-3">
         {activeColors.map((color, idx) => {
           const isCurrent = color === currentColor;

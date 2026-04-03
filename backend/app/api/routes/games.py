@@ -1,6 +1,7 @@
 """Game API: create, join, ready, roll, move, pass, chance, websocket."""
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ from app.services.game_engine import (
 from app.services.auth_service import decode_token, get_db
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +199,18 @@ async def _restore_lobby_from_db(
         if not record.engine_state_json:
             return None
 
+        restored_state = json.loads(record.engine_state_json)
+        state_colors = restored_state.get("active_colors") or list(
+            ACTIVE_COLORS_BY_COUNT.get(
+                record.player_count,
+                ("red", "blue", "yellow", "green")[: record.player_count],
+            )
+        )
         slots = [
-            (0, "red", record.player_one_display_name, record.player_one_user_id),
-            (1, "blue", record.player_two_display_name, record.player_two_user_id),
-            (2, "yellow", record.player_three_display_name, record.player_three_user_id),
-            (3, "green", record.player_four_display_name, record.player_four_user_id),
+            (0, state_colors[0] if len(state_colors) > 0 else "red", record.player_one_display_name, record.player_one_user_id),
+            (1, state_colors[1] if len(state_colors) > 1 else "blue", record.player_two_display_name, record.player_two_user_id),
+            (2, state_colors[2] if len(state_colors) > 2 else "yellow", record.player_three_display_name, record.player_three_user_id),
+            (3, state_colors[3] if len(state_colors) > 3 else "green", record.player_four_display_name, record.player_four_user_id),
         ]
         players = [
             PlayerRecord(
@@ -223,7 +232,7 @@ async def _restore_lobby_from_db(
             player_count=record.player_count,
             players=players,
             status=restored_status,
-            engine_state=json.loads(record.engine_state_json),
+            engine_state=restored_state,
             created_at=record.created_at,
         )
         _lobbies[game_id] = lobby
@@ -306,6 +315,11 @@ def _engine_state_to_schema(game_id: str, state: GameEngineState, lobby: LobbyRe
         )
         for p in lobby.players
     ]
+    resume_ready_player_indices = sorted(
+        player.player_index
+        for player in lobby.players
+        if player.player_id in lobby.resume_ready_set
+    )
     return GameState(
         id=game_id,
         status=status,  # type: ignore[arg-type]
@@ -318,6 +332,9 @@ def _engine_state_to_schema(game_id: str, state: GameEngineState, lobby: LobbyRe
         winner_index=state.winner_index,
         valid_moves=valid_moves,
         players=lobby_players,
+        resume_ready_player_indices=resume_ready_player_indices,
+        resume_ready_count=len(resume_ready_player_indices),
+        resume_needed=lobby.player_count if lobby.status == "paused" else 0,
     )
 
 
@@ -336,13 +353,11 @@ def _sync_player_identity_from_auth(
     player_id: Optional[str],
     authorization: str,
 ) -> Optional[PlayerRecord]:
-    """Rebind a restored player's transient player_id using the authenticated user."""
+    """Resolve a player from the authenticated user when available."""
     user_id = _optional_user_id(authorization)
     if user_id is None:
         return None
     record = next((p for p in lobby.players if p.user_id == user_id), None)
-    if record and player_id and record.player_id != player_id:
-        record.player_id = player_id
     return record
 
 
@@ -352,9 +367,14 @@ def _require_active_player(
     authorization: str = "",
 ) -> PlayerRecord:
     """Validate X-Player-ID header and return the matching PlayerRecord."""
-    record = next((p for p in lobby.players if p.player_id == player_id), None) if player_id else None
-    if not record:
-        record = _sync_player_identity_from_auth(lobby, player_id, authorization)
+    record_by_id = next((p for p in lobby.players if p.player_id == player_id), None) if player_id else None
+    record_by_auth = _sync_player_identity_from_auth(lobby, player_id, authorization)
+
+    # Live gameplay should trust the explicit seat identity first.
+    # Auth is a recovery fallback for reconnect/reclaim flows when the
+    # stored X-Player-ID is missing or stale.
+    record = record_by_id or record_by_auth
+
     if not record:
         if not player_id:
             raise HTTPException(status_code=403, detail="Missing X-Player-ID header")
@@ -372,6 +392,26 @@ def _check_turn(
     record = _require_active_player(lobby, player_id, authorization)
     current_color = state.active_colors[state.current_player_index]
     if record.color != current_color:
+        logger.warning(
+            "TURN_MISMATCH game=%s x_player_id=%s auth_user_id=%s resolved_player_id=%s resolved_color=%s current_color=%s current_player_index=%s players=%s",
+            lobby.game_id,
+            player_id,
+            _optional_user_id(authorization),
+            record.player_id,
+            record.color,
+            current_color,
+            state.current_player_index,
+            [
+                {
+                    "player_id": player.player_id,
+                    "index": player.player_index,
+                    "color": player.color,
+                    "display_name": player.display_name,
+                    "user_id": player.user_id,
+                }
+                for player in lobby.players
+            ],
+        )
         raise HTTPException(status_code=403, detail="Not your turn")
 
 
@@ -620,6 +660,15 @@ async def roll_dice(
     if lobby.status != "active" or lobby.engine_state is None:
         raise HTTPException(status_code=400, detail="Game has not started yet")
     state = dict_to_state(lobby.engine_state)
+    logger.info(
+        "ROLL_ATTEMPT game=%s x_player_id=%s auth_user_id=%s current_color=%s current_player_index=%s has_rolled=%s",
+        game_id,
+        x_player_id,
+        _optional_user_id(authorization),
+        state.active_colors[state.current_player_index],
+        state.current_player_index,
+        state.has_rolled,
+    )
     _check_turn(lobby, x_player_id, state, authorization)
     _bind_player_user(lobby, _require_active_player(lobby, x_player_id, authorization), authorization)
 

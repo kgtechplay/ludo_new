@@ -63,7 +63,7 @@ export default function GamePage() {
   const [lobbyOverride, setLobbyOverride] = useState<LobbyState | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [hasClickedReady, setHasClickedReady] = useState(false);
-  const [myResumeClicked, setMyResumeClicked] = useState(() => (gameId ? isResumeWaiting(gameId) : false));
+  const [myResumeClicked, setMyResumeClicked] = useState(false);
 
   // Game UI state
   const [loading, setLoading] = useState(false);
@@ -292,22 +292,28 @@ export default function GamePage() {
       setGame(wsGame);
       if (wsGame.status !== "paused") {
         setMyResumeClicked(false);
-      } else if (gameId && isResumeWaiting(gameId)) {
-        setMyResumeClicked(true);
+      } else if (myPlayerIndex !== null) {
+        setMyResumeClicked(wsGame.resume_ready_player_indices.includes(myPlayerIndex));
       }
     }
-  }, [wsGame]);
+  }, [wsGame, myPlayerIndex]);
 
   useEffect(() => {
-    if (!gameId) return;
-    setMyResumeClicked(isResumeWaiting(gameId));
-  }, [gameId]);
+    if (!game || game.status !== "paused" || myPlayerIndex === null) {
+      if (game?.status !== "paused") {
+        setMyResumeClicked(false);
+      }
+      return;
+    }
+    setMyResumeClicked(game.resume_ready_player_indices.includes(myPlayerIndex));
+  }, [game, myPlayerIndex]);
 
 
   // Opponent rolling animation
   const prevOpponentRolling = useRef(false);
   // Set when rolling_stop arrives before the roll result (game_state_updated lags behind).
   const pendingOpponentSettleRef = useRef(false);
+  const previousTurnIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     const wasRolling = prevOpponentRolling.current;
@@ -578,6 +584,16 @@ export default function GamePage() {
     resetRollVisuals,
   ]);
 
+  useEffect(() => {
+    const currentTurn = game?.current_player_index ?? null;
+    const previousTurn = previousTurnIndexRef.current;
+    previousTurnIndexRef.current = currentTurn;
+    if (previousTurn == null || currentTurn == null || previousTurn === currentTurn) return;
+    if (rollActiveRef.current) return;
+    pendingOpponentSettleRef.current = false;
+    resetRollVisuals();
+  }, [game?.current_player_index, resetRollVisuals]);
+
   // -----------------------------------------------------------------------
   // Game action handlers
   // -----------------------------------------------------------------------
@@ -613,7 +629,17 @@ export default function GamePage() {
       setSelectedMove(null);
     } catch (e) {
       resetRollVisuals();
-      setError(e instanceof Error ? e.message : "Roll failed");
+      const message = e instanceof Error ? e.message : "Roll failed";
+      if (message.includes("Not your turn")) {
+        try {
+          const refreshedState = await api.getGame(game.id, playerId, token);
+          setGame(refreshedState);
+          setDisplayRoll(refreshedState.last_roll);
+        } catch {
+          // Keep the original turn error if refresh fails.
+        }
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -1066,7 +1092,10 @@ export default function GamePage() {
             {myResumeClicked ? (
               <p className="mt-2 text-sm leading-6 text-slate-400">
                 Waiting for other players to resume&hellip;{" "}
-                <span className="font-semibold text-white">{resumeReadyCount}/{resumeNeeded}</span> ready
+                <span className="font-semibold text-white">
+                  {(game?.resume_ready_count ?? resumeReadyCount)}/{(game?.resume_needed ?? resumeNeeded)}
+                </span>{" "}
+                ready
               </p>
             ) : (
               <p className="mt-2 text-sm leading-6 text-slate-400">
@@ -1145,7 +1174,9 @@ export default function GamePage() {
                     disabled={loading || myResumeClicked}
                     className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                   >
-                    {myResumeClicked ? `Waiting... (${resumeReadyCount}/${resumeNeeded})` : "Resume"}
+                    {myResumeClicked
+                      ? `Waiting... (${game?.resume_ready_count ?? resumeReadyCount}/${game?.resume_needed ?? resumeNeeded})`
+                      : "Resume"}
                   </button>
                 )}
                 {myPlayerIndex === 0 && game?.status !== "waiting" && (

@@ -72,6 +72,9 @@ class GameState(BaseModel):
     valid_moves: list[dict] = []  # [{"color": "red", "token_index": 0, "target_kind": "path"}, ...]
     message: str = ""
     players: list[LobbyPlayerSchema] = []
+    resume_ready_player_indices: list[int] = []
+    resume_ready_count: int = 0
+    resume_needed: int = 0
 
 
 class RollResponse(BaseModel):

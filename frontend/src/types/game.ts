@@ -46,6 +46,9 @@ export interface GameState {
   }[];
   message: string;
   players: LobbyPlayer[];
+  resume_ready_player_indices: number[];
+  resume_ready_count: number;
+  resume_needed: number;
 }
 
 export interface RollResponse {
